@@ -1,34 +1,37 @@
 let socket;
-try {
-  socket = io();
-} catch (e) {
-  console.error("Socket error", e);
-}
+try { socket = io(); } catch (e) { console.error("Socket error", e); }
 
-// 1. КОМНАТА И URL
+// Парсинг комнаты
 let roomId = 'party_1';
 try {
   const urlParams = new URLSearchParams(window.location.search);
-  const pRoom = urlParams.get('room');
-  if (pRoom) {
-    roomId = pRoom;
-  } else {
+  const p = urlParams.get('room');
+  if (p) roomId = p;
+  else {
     roomId = 'room_' + Math.random().toString(36).substring(2, 8);
-    if (window.history && window.history.replaceState && window.location.protocol.startsWith('http')) {
+    if (window.history && window.history.replaceState && location.protocol.startsWith('http')) {
       window.history.replaceState(null, '', `?room=${roomId}`);
     }
   }
-} catch (err) {}
+} catch (e) {}
 
 document.getElementById('room-badge').innerText = `Комната: ${roomId}`;
 
+let myId = null;
 let myUsername = 'Гость';
+let isHost = false;
+let currentHostId = null;
 let serverTimeDelta = 0;
 let isRemoteAction = false;
-let currentEngine = 'html5'; // 'html5' | 'hls' | 'youtube' | 'stream'
+let currentEngine = 'html5';
 let hlsInstance = null;
 let ytPlayer = null;
 let ytReady = false;
+
+// WebRTC Voice Mesh
+let localVoiceStream = null;
+let isMicActive = false;
+const voicePeers = {}; // peerId -> RTCPeerConnection
 
 // DOM элементы
 const video = document.getElementById('main-video');
@@ -38,15 +41,26 @@ const unlockModal = document.getElementById('unlock-modal');
 const usernameInput = document.getElementById('username-input');
 const btnEnter = document.getElementById('btn-enter');
 const playerControls = document.getElementById('player-controls');
-const playerTapZone = document.getElementById('player-tap-zone');
-const seekBar = document.getElementById('seek-bar');
-const seekFill = document.getElementById('seek-fill');
-const timeDisplay = document.getElementById('time-display');
 const btnPlayPause = document.getElementById('btn-play-pause');
 const iconPlay = document.getElementById('icon-play');
 const iconPause = document.getElementById('icon-pause');
+const seekBar = document.getElementById('seek-bar');
+const seekFill = document.getElementById('seek-fill');
+const seekBuffered = document.getElementById('seek-buffered');
+const timeDisplay = document.getElementById('time-display');
+const flashBox = document.getElementById('play-state-flash');
+const flashPlay = document.getElementById('flash-icon-play');
+const flashPause = document.getElementById('flash-icon-pause');
 
-// --- РЕШЕНИЕ ПРОБЛЕМЫ: ПОЛЕ ВВОДА НЕ УХОДИТ ПОД КЛАВИАТУРУ ---
+// Меню настроек
+const btnSettings = document.getElementById('btn-settings');
+const settingsMenu = document.getElementById('settings-menu');
+const selectAudio = document.getElementById('select-audio-track');
+const selectSubtitles = document.getElementById('select-subtitle-track');
+const selectQuality = document.getElementById('select-quality-track');
+const selectSpeed = document.getElementById('select-speed');
+
+// --- 1. АВТОПОДНЯТИЕ ИНПУТА НАД КЛАВИАТУРОЙ ---
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => {
     document.getElementById('app-root').style.height = `${window.visualViewport.height}px`;
@@ -55,28 +69,21 @@ if (window.visualViewport) {
   });
 }
 
-// --- ВХОД В КОМНАТУ ---
+// --- 2. ВХОД В КОМНАТУ ---
 btnEnter.addEventListener('click', () => {
   myUsername = usernameInput.value.trim() || ('Участник_' + Math.floor(Math.random() * 900 + 100));
   unlockModal.style.display = 'none';
 
-  // Разблокировка медиа-контекста iOS
-  try {
-    video.play().then(() => video.pause()).catch(() => {});
-  } catch (e) {}
+  try { video.play().then(() => video.pause()).catch(() => {}); } catch (e) {}
 
   if (socket) {
     if (socket.connected) socket.emit('join_room', { roomId, username: myUsername });
     else socket.on('connect', () => socket.emit('join_room', { roomId, username: myUsername }));
   }
-  showToast(`Вы вошли как ${myUsername}`);
+  showToast(`Добро пожаловать, ${myUsername}!`);
 });
+usernameInput.addEventListener('keydown', e => { if (e.key === 'Enter') btnEnter.click(); });
 
-usernameInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') btnEnter.click();
-});
-
-// Скопировать ссылку
 document.getElementById('btn-copy-invite').addEventListener('click', () => {
   navigator.clipboard.writeText(window.location.href)
     .then(() => showToast('Ссылка скопирована!'))
@@ -87,12 +94,11 @@ function showToast(text) {
   const toast = document.getElementById('toast');
   toast.innerText = text;
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2800);
+  setTimeout(() => toast.classList.remove('show'), 2500);
 }
 
-// --- УНИВЕРСАЛЬНЫЙ ДВИЖОК ПЛЕЕРА (YOUTUBE / HLS / MP4) ---
+// --- 3. УНИВЕРСАЛЬНЫЙ ПЛЕЕР (YOUTUBE / HLS С ДОРОЖКАМИ / MP4) ---
 
-// Проверка типа медиа по ссылке
 function detectMediaType(url) {
   if (!url) return 'html5';
   if (url.includes('youtube.com/') || url.includes('youtu.be/')) return 'youtube';
@@ -101,59 +107,44 @@ function detectMediaType(url) {
 }
 
 function extractYouTubeId(url) {
-  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
-  return match ? match[1] : null;
+  const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+  return m ? m[1] : null;
 }
 
-// Инициализация YouTube IFrame API
 window.onYouTubeIframeAPIReady = function() {
   ytPlayer = new YT.Player('yt-player', {
     height: '100%',
     width: '100%',
-    playerVars: {
-      autoplay: 0,
-      controls: 0,
-      disablekb: 1,
-      modestbranding: 1,
-      rel: 0,
-      playsinline: 1
-    },
+    playerVars: { autoplay: 0, controls: 0, disablekb: 1, rel: 0, playsinline: 1 },
     events: {
       onReady: () => { ytReady = true; },
-      onStateChange: onYouTubeStateChange
+      onStateChange: (e) => {
+        if (isRemoteAction || currentEngine !== 'youtube') return;
+        if (e.data === YT.PlayerState.PLAYING) emitPlayerAction(true);
+        else if (e.data === YT.PlayerState.PAUSED) emitPlayerAction(false);
+      }
     }
   });
 };
 
-function onYouTubeStateChange(event) {
-  if (isRemoteAction || currentEngine !== 'youtube') return;
-  if (event.data === YT.PlayerState.PLAYING) emitPlayerAction(true);
-  else if (event.data === YT.PlayerState.PAUSED) emitPlayerAction(false);
-}
-
-// Переключение видеоисточника
 function loadMediaSource(url) {
   const type = detectMediaType(url);
   currentEngine = type;
 
-  // Очистка старых источников
   if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
   video.pause();
   video.style.display = 'none';
   ytBox.style.display = 'none';
   streamVideo.style.display = 'none';
 
+  resetSettingsOptions();
+
   if (type === 'youtube') {
     ytBox.style.display = 'block';
     const ytid = extractYouTubeId(url);
     if (ytid) {
-      if (ytReady && ytPlayer && ytPlayer.loadVideoById) {
-        ytPlayer.loadVideoById(ytid);
-      } else {
-        setTimeout(() => loadMediaSource(url), 500);
-      }
-    } else {
-      showToast('Неверная ссылка YouTube');
+      if (ytReady && ytPlayer && ytPlayer.loadVideoById) ytPlayer.loadVideoById(ytid);
+      else setTimeout(() => loadMediaSource(url), 500);
     }
   } else if (type === 'hls') {
     video.style.display = 'block';
@@ -161,10 +152,18 @@ function loadMediaSource(url) {
       hlsInstance = new Hls();
       hlsInstance.loadSource(url);
       hlsInstance.attachMedia(video);
+
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+        populateHlsTracks();
+        video.play().catch(() => {});
+      });
+
+      hlsInstance.on(Hls.Events.AUDIO_TRACKS_UPDATED, populateHlsTracks);
+      hlsInstance.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, populateHlsTracks);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = url; // Safari iOS нативно поддерживает HLS
+      video.src = url;
+      video.play().catch(() => {});
     }
-    video.play().catch(() => {});
   } else {
     video.style.display = 'block';
     video.src = url;
@@ -172,36 +171,217 @@ function loadMediaSource(url) {
   }
 }
 
-// --- УПРАВЛЕНИЕ ВОСПРОИЗВЕДЕНИЕМ (PLAY / PAUSE / SEEK) ---
-function getPlayerCurrentTime() {
-  if (currentEngine === 'youtube' && ytReady && ytPlayer.getCurrentTime) {
-    return ytPlayer.getCurrentTime() || 0;
+// Заполнение меню озвучек, субтитров и качества
+function resetSettingsOptions() {
+  selectAudio.innerHTML = '<option value="-1">По умолчанию / Основная</option>';
+  selectSubtitles.innerHTML = '<option value="-1">Отключены</option>';
+  selectQuality.innerHTML = '<option value="-1">Автоматически</option>';
+}
+
+function populateHlsTracks() {
+  if (!hlsInstance) return;
+
+  // Озвучки
+  if (hlsInstance.audioTracks && hlsInstance.audioTracks.length > 1) {
+    selectAudio.innerHTML = '';
+    hlsInstance.audioTracks.forEach((t, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.innerText = t.name || t.lang || `Дорожка ${i + 1}`;
+      if (i === hlsInstance.audioTrack) opt.selected = true;
+      selectAudio.appendChild(opt);
+    });
   }
+
+  // Субтитры
+  if (hlsInstance.subtitleTracks && hlsInstance.subtitleTracks.length > 0) {
+    selectSubtitles.innerHTML = '<option value="-1">Отключены</option>';
+    hlsInstance.subtitleTracks.forEach((t, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.innerText = t.name || t.lang || `Субтитры ${i + 1}`;
+      if (i === hlsInstance.subtitleTrack) opt.selected = true;
+      selectSubtitles.appendChild(opt);
+    });
+  }
+
+  // Качество
+  if (hlsInstance.levels && hlsInstance.levels.length > 1) {
+    selectQuality.innerHTML = '<option value="-1">Автоматически</option>';
+    hlsInstance.levels.forEach((lvl, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.innerText = `${lvl.height}p (${Math.round(lvl.bitrate / 1000)} kbps)`;
+      selectQuality.appendChild(opt);
+    });
+  }
+}
+
+selectAudio.addEventListener('change', (e) => {
+  if (hlsInstance && hlsInstance.audioTracks) {
+    hlsInstance.audioTrack = parseInt(e.target.value);
+    showToast(`Озвучка: ${e.target.options[e.target.selectedIndex].text}`);
+  }
+});
+
+selectSubtitles.addEventListener('change', (e) => {
+  if (hlsInstance) {
+    hlsInstance.subtitleTrack = parseInt(e.target.value);
+    showToast(`Субтитры: ${e.target.options[e.target.selectedIndex].text}`);
+  }
+});
+
+selectQuality.addEventListener('change', (e) => {
+  if (hlsInstance) {
+    hlsInstance.currentLevel = parseInt(e.target.value);
+    showToast(`Качество: ${e.target.options[e.target.selectedIndex].text}`);
+  }
+});
+
+selectSpeed.addEventListener('change', (e) => {
+  const speed = parseFloat(e.target.value);
+  video.playbackRate = speed;
+  if (ytPlayer && ytPlayer.setPlaybackRate) ytPlayer.setPlaybackRate(speed);
+  showToast(`Скорость: ${speed}x`);
+});
+
+btnSettings.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsMenu.classList.toggle('open');
+});
+document.addEventListener('click', () => settingsMenu.classList.remove('open'));
+
+// --- 4. УПРАВЛЕНИЕ И ЖЕСТЫ (КЛИК ПО ЭКРАНУ = ПАУЗА / ПЛЕЙ) ---
+
+function getPlayerCurrentTime() {
+  if (currentEngine === 'youtube' && ytReady && ytPlayer.getCurrentTime) return ytPlayer.getCurrentTime() || 0;
   return video.currentTime || 0;
 }
-
 function getPlayerDuration() {
-  if (currentEngine === 'youtube' && ytReady && ytPlayer.getDuration) {
-    return ytPlayer.getDuration() || 0;
-  }
+  if (currentEngine === 'youtube' && ytReady && ytPlayer.getDuration) return ytPlayer.getDuration() || 0;
   return video.duration || 0;
 }
-
-function setPlayerTime(time) {
-  if (currentEngine === 'youtube' && ytReady && ytPlayer.seekTo) {
-    ytPlayer.seekTo(time, true);
-  } else {
-    video.currentTime = time;
-  }
+function setPlayerTime(t) {
+  if (currentEngine === 'youtube' && ytReady && ytPlayer.seekTo) ytPlayer.seekTo(t, true);
+  else video.currentTime = t;
 }
-
 function setPlayerState(play) {
   if (currentEngine === 'youtube' && ytReady) {
     if (play) ytPlayer.playVideo(); else ytPlayer.pauseVideo();
   } else {
     if (play) video.play().catch(() => {}); else video.pause();
   }
+  updatePlayButtonUI(play);
 }
+
+function updatePlayButtonUI(isPlaying) {
+  iconPlay.style.display = isPlaying ? 'none' : 'block';
+  iconPause.style.display = isPlaying ? 'block' : 'none';
+}
+
+function triggerFlashIcon(isPlaying) {
+  flashPlay.style.display = isPlaying ? 'block' : 'none';
+  flashPause.style.display = isPlaying ? 'none' : 'block';
+  flashBox.classList.add('show');
+  setTimeout(() => flashBox.classList.remove('show'), 400);
+}
+
+function togglePlayPause() {
+  const isPlaying = currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused;
+  setPlayerState(!isPlaying);
+  triggerFlashIcon(!isPlaying);
+  emitPlayerAction(!isPlaying);
+}
+
+// Тап по центру = Play/Pause
+document.getElementById('tap-center').addEventListener('click', togglePlayPause);
+btnPlayPause.addEventListener('click', togglePlayPause);
+
+// Двойные тапы перемотки
+let leftClicks = 0, rightClicks = 0;
+document.getElementById('tap-left').addEventListener('click', () => {
+  leftClicks++;
+  setTimeout(() => {
+    if (leftClicks === 1) showControls();
+    else if (leftClicks >= 2) {
+      setPlayerTime(Math.max(0, getPlayerCurrentTime() - 10));
+      emitPlayerAction();
+      showToast('⏪ 10 сек');
+    }
+    leftClicks = 0;
+  }, 250);
+});
+
+document.getElementById('tap-right').addEventListener('click', () => {
+  rightClicks++;
+  setTimeout(() => {
+    if (rightClicks === 1) showControls();
+    else if (rightClicks >= 2) {
+      setPlayerTime(Math.min(getPlayerDuration(), getPlayerCurrentTime() + 10));
+      emitPlayerAction();
+      showToast('10 сек ⏩');
+    }
+    rightClicks = 0;
+  }, 250);
+});
+
+document.getElementById('btn-backward').onclick = () => { setPlayerTime(Math.max(0, getPlayerCurrentTime() - 10)); emitPlayerAction(); };
+document.getElementById('btn-forward').onclick = () => { setPlayerTime(Math.min(getPlayerDuration(), getPlayerCurrentTime() + 10)); emitPlayerAction(); };
+
+// Автоскрытие панели управления
+let controlsTimeout;
+function showControls() {
+  playerControls.classList.remove('hidden');
+  clearTimeout(controlsTimeout);
+  controlsTimeout = setTimeout(() => {
+    const isPlaying = currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused;
+    if (isPlaying) playerControls.classList.add('hidden');
+  }, 3500);
+}
+document.getElementById('player-container').addEventListener('mousemove', showControls);
+document.getElementById('player-container').addEventListener('touchstart', showControls);
+
+// Таймлайн
+setInterval(() => {
+  const cur = getPlayerCurrentTime();
+  const dur = getPlayerDuration();
+  if (dur > 0) {
+    seekFill.style.width = (cur / dur * 100) + '%';
+    timeDisplay.innerText = `${formatTime(cur)} / ${formatTime(dur)}`;
+    if (video.buffered.length > 0) {
+      seekBuffered.style.width = (video.buffered.end(video.buffered.length - 1) / dur * 100) + '%';
+    }
+  }
+}, 300);
+
+seekBar.onclick = (e) => {
+  const dur = getPlayerDuration();
+  if (dur <= 0) return;
+  const rect = seekBar.getBoundingClientRect();
+  setPlayerTime(((e.clientX - rect.left) / rect.width) * dur);
+  emitPlayerAction();
+};
+
+function formatTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m < 10 ? '0' : ''}${m}:${sec < 10 ? '0' : ''}${sec}`;
+}
+
+// Горизонтальный Fullscreen
+document.getElementById('btn-fullscreen').onclick = async () => {
+  const c = document.getElementById('player-container');
+  if (!document.fullscreenElement) {
+    if (c.requestFullscreen) await c.requestFullscreen();
+    else if (c.webkitRequestFullscreen) await c.webkitRequestFullscreen();
+    if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+  } else {
+    document.exitFullscreen();
+    if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+  }
+};
+
+// --- 5. ЖЕЛЕЗНАЯ СИНХРОНИЗАЦИЯ (HOST-HEARTBEAT) ---
 
 function emitPlayerAction(forceIsPlaying) {
   if (isRemoteAction || !socket) return;
@@ -210,153 +390,295 @@ function emitPlayerAction(forceIsPlaying) {
   );
   socket.emit('player_action', {
     currentTime: getPlayerCurrentTime(),
-    isPlaying: isPlaying
+    isPlaying
   });
 }
 
-btnPlayPause.addEventListener('click', () => {
-  const isCurrentlyPlaying = currentEngine === 'youtube' 
-    ? (ytPlayer && ytPlayer.getPlayerState() === 1) 
-    : !video.paused;
-
-  setPlayerState(!isCurrentlyPlaying);
-  emitPlayerAction(!isCurrentlyPlaying);
-});
-
-video.addEventListener('play', () => {
-  iconPlay.style.display = 'none';
-  iconPause.style.display = 'block';
-  emitPlayerAction(true);
-});
-video.addEventListener('pause', () => {
-  iconPlay.style.display = 'block';
-  iconPause.style.display = 'none';
-  emitPlayerAction(false);
-});
-
-document.getElementById('btn-backward').addEventListener('click', () => {
-  setPlayerTime(Math.max(0, getPlayerCurrentTime() - 10));
-  emitPlayerAction();
-});
-document.getElementById('btn-forward').addEventListener('click', () => {
-  setPlayerTime(Math.min(getPlayerDuration(), getPlayerCurrentTime() + 10));
-  emitPlayerAction();
-});
-
-// Таймлайн бар
+// Хост периодически шлет точный таймкод
 setInterval(() => {
-  const cur = getPlayerCurrentTime();
-  const dur = getPlayerDuration();
-  if (dur > 0) {
-    seekFill.style.width = (cur / dur * 100) + '%';
-    timeDisplay.innerText = `${formatTime(cur)} / ${formatTime(dur)}`;
+  if (isHost && socket && socket.connected) {
+    const isPlaying = currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused;
+    socket.emit('host_heartbeat', {
+      currentTime: getPlayerCurrentTime(),
+      isPlaying
+    });
   }
-}, 300);
+}, 1500);
 
-seekBar.addEventListener('click', e => {
-  const dur = getPlayerDuration();
-  if (dur <= 0) return;
-  const rect = seekBar.getBoundingClientRect();
-  const perc = (e.clientX - rect.left) / rect.width;
-  setPlayerTime(perc * dur);
-  emitPlayerAction();
-});
+// Кнопка принудительной синхронизации
+document.getElementById('btn-force-sync').onclick = () => {
+  showToast('Синхронизация с ведущим...');
+  if (socket) socket.emit('join_room', { roomId, username: myUsername });
+};
 
-function formatTime(s) {
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m < 10 ? '0' : ''}${m}:${sec < 10 ? '0' : ''}${sec}`;
-}
+// --- 6. WEBRTC ГОЛОСОВАЯ СВЯЗЬ (МИКРОФОН) ---
+const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+const btnMic = document.getElementById('btn-mic');
+const micLabel = document.getElementById('mic-label');
 
-// --- УМНОЕ СКРЫТИЕ ПАНЕЛИ УПРАВЛЕНИЯ ПЛЕЕРОМ ---
-let controlsTimeout;
-function showControls() {
-  playerControls.classList.remove('hidden');
-  clearTimeout(controlsTimeout);
-  controlsTimeout = setTimeout(() => {
-    const isPlaying = currentEngine === 'youtube' 
-      ? (ytPlayer && ytPlayer.getPlayerState() === 1) 
-      : !video.paused;
-    if (isPlaying) playerControls.classList.add('hidden');
-  }, 3500);
-}
-
-playerTapZone.addEventListener('click', () => {
-  if (playerControls.classList.contains('hidden')) showControls();
-  else playerControls.classList.add('hidden');
-});
-playerTapZone.addEventListener('mousemove', showControls);
-
-// --- ГОРИЗОНТАЛЬНЫЙ ПОЛНОЭКРАННЫЙ РЕЖИМ ---
-document.getElementById('btn-fullscreen').addEventListener('click', async () => {
-  const container = document.getElementById('player-container');
-
-  if (!document.fullscreenElement) {
-    if (container.requestFullscreen) {
-      await container.requestFullscreen();
-    } else if (container.webkitRequestFullscreen) {
-      await container.webkitRequestFullscreen();
-    }
-
-    // Принудительно разворачиваем экран в горизонтальный режим
-    if (screen.orientation && screen.orientation.lock) {
-      screen.orientation.lock('landscape').catch(() => {});
+btnMic.onclick = async () => {
+  if (!localVoiceStream) {
+    try {
+      localVoiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      isMicActive = true;
+      btnMic.classList.add('active');
+      micLabel.innerText = 'Голос (Вкл)';
+      if (socket) socket.emit('toggle_mic_status', true);
+      showToast('Микрофон включен!');
+    } catch (e) {
+      return showToast('Разрешите доступ к микрофону в браузере');
     }
   } else {
-    document.exitFullscreen();
-    if (screen.orientation && screen.orientation.unlock) {
-      screen.orientation.unlock();
+    isMicActive = !isMicActive;
+    localVoiceStream.getAudioTracks().forEach(t => t.enabled = isMicActive);
+    btnMic.classList.toggle('active', isMicActive);
+    micLabel.innerText = isMicActive ? 'Голос (Вкл)' : 'Голос (Выкл)';
+    if (socket) socket.emit('toggle_mic_status', isMicActive);
+    showToast(isMicActive ? 'Микрофон включен' : 'Микрофон отключен');
+  }
+};
+
+// --- 7. ЧАТ И КАСТОМНЫЙ ПЛЕЕР ГОЛОСОВЫХ СООБЩЕНИЙ ---
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-text-input');
+const chatScroller = document.getElementById('chat-scroller');
+const fileInput = document.getElementById('file-input');
+const btnVoiceToggle = document.getElementById('btn-voice-toggle');
+const voiceBar = document.getElementById('voice-record-bar');
+const voiceTimer = document.getElementById('voice-timer');
+const btnCancelVoice = document.getElementById('btn-cancel-voice');
+const btnSendVoice = document.getElementById('btn-send-voice');
+
+let mediaRecorder = null;
+let voiceChunks = [];
+let voiceSeconds = 0;
+let voiceTimerInt = null;
+
+chatForm.onsubmit = (e) => {
+  e.preventDefault();
+  const text = chatInput.value.trim();
+  if (text && socket) {
+    socket.emit('chat_send', { text });
+    chatInput.value = '';
+  }
+};
+
+fileInput.onchange = () => {
+  const file = fileInput.files[0];
+  if (!file || !socket) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let t = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'file');
+    socket.emit('chat_send', { fileData: reader.result, fileType: t });
+    fileInput.value = '';
+  };
+  reader.readAsDataURL(file);
+};
+
+// Запись голосовых
+btnVoiceToggle.onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceChunks = [];
+    let mime = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+    mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
+
+    mediaRecorder.start();
+    voiceBar.style.display = 'flex';
+    voiceSeconds = 0;
+    voiceTimer.innerText = '00:00';
+    voiceTimerInt = setInterval(() => {
+      voiceSeconds++;
+      const m = Math.floor(voiceSeconds / 60);
+      const s = voiceSeconds % 60;
+      voiceTimer.innerText = `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    }, 1000);
+  } catch (err) {
+    showToast('Нет доступа к микрофону');
+  }
+};
+
+btnCancelVoice.onclick = () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  clearInterval(voiceTimerInt);
+  voiceBar.style.display = 'none';
+};
+
+btnSendVoice.onclick = () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.onstop = () => {
+      const mime = mediaRecorder.mimeType;
+      const blob = new Blob(voiceChunks, { type: mime });
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (socket) socket.emit('chat_send', { fileData: reader.result, fileType: 'audio', audioDuration: voiceSeconds });
+      };
+      reader.readAsDataURL(blob);
+    };
+    mediaRecorder.stop();
+  }
+  clearInterval(voiceTimerInt);
+  voiceBar.style.display = 'none';
+};
+
+// Отрисовка сообщений с разделением ЛЕВО/ПРАВО и кастомным аудиоплеером
+function appendMessageUI(msg) {
+  const div = document.createElement('div');
+  
+  if (msg.system) {
+    div.className = 'chat-msg system';
+    div.innerText = msg.text;
+  } else {
+    // Проверка отправителя для разделения ЛЕВО / ПРАВО
+    const isMe = (myId && msg.senderId === myId) || (msg.username === myUsername);
+    div.className = `chat-msg ${isMe ? 'self' : 'other'}`;
+
+    let mediaHTML = '';
+    if (msg.fileData) {
+      if (msg.fileType === 'image') {
+        mediaHTML = `<img src="${msg.fileData}" class="msg-media">`;
+      } else if (msg.fileType === 'video') {
+        mediaHTML = `<video src="${msg.fileData}" controls class="msg-media"></video>`;
+      } else if (msg.fileType === 'audio') {
+        // Кастомный плеер голосового сообщения
+        const playerUniqueId = 'vp_' + Math.random().toString(36).substr(2, 6);
+        mediaHTML = `
+          <div class="voice-msg-player" id="${playerUniqueId}">
+            <button class="btn-voice-play" type="button">
+              <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+            <div class="voice-wave-container">
+              <div class="voice-wave-bar"><div class="voice-wave-progress"></div></div>
+              <div class="voice-meta-row">
+                <span class="voice-time">0:00 / ${formatTime(msg.audioDuration || 0)}</span>
+                <span class="voice-speed-pill">1x</span>
+              </div>
+            </div>
+            <audio src="${msg.fileData}" style="display:none;"></audio>
+          </div>
+        `;
+      }
+    }
+
+    div.innerHTML = `
+      <div class="msg-header">
+        <span class="msg-user">${escapeHTML(msg.username)}</span>
+      </div>
+      ${msg.text ? `<div class="msg-text">${escapeHTML(msg.text)}</div>` : ''}
+      ${mediaHTML}
+      <div class="msg-time">${msg.time}</div>
+    `;
+
+    // Инициализация кастомного аудио плеера
+    if (msg.fileType === 'audio') {
+      setTimeout(() => initVoicePlayer(div), 50);
     }
   }
-});
 
-// --- ДОБАВЛЕНИЕ И СМЕНА ССЫЛОК ---
-document.getElementById('btn-play-now').addEventListener('click', () => {
-  const url = document.getElementById('media-url-input').value.trim();
-  const title = document.getElementById('media-title-input').value.trim() || url;
-  if (!url) return showToast('Вставьте ссылку');
+  chatScroller.appendChild(div);
+  chatScroller.scrollTop = chatScroller.scrollHeight;
+}
 
-  if (socket) socket.emit('change_video_direct', { url, title });
-  document.getElementById('media-url-input').value = '';
-  document.getElementById('media-title-input').value = '';
-  switchTab('chat');
-});
+function initVoicePlayer(container) {
+  const audio = container.querySelector('audio');
+  const btnPlay = container.querySelector('.btn-voice-play');
+  const bar = container.querySelector('.voice-wave-bar');
+  const progress = container.querySelector('.voice-wave-progress');
+  const timeText = container.querySelector('.voice-time');
+  const speedPill = container.querySelector('.voice-speed-pill');
 
-document.getElementById('btn-add-queue').addEventListener('click', () => {
-  const url = document.getElementById('media-url-input').value.trim();
-  const title = document.getElementById('media-title-input').value.trim() || url;
-  if (!url) return showToast('Вставьте ссылку');
+  if (!audio) return;
 
-  if (socket) socket.emit('add_to_queue', { url, title });
-  document.getElementById('media-url-input').value = '';
-  document.getElementById('media-title-input').value = '';
-  showToast('Добавлено в очередь!');
-});
+  btnPlay.onclick = () => {
+    if (audio.paused) {
+      document.querySelectorAll('audio').forEach(a => { if (a !== audio) a.pause(); });
+      audio.play();
+      btnPlay.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`;
+    } else {
+      audio.pause();
+      btnPlay.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>`;
+    }
+  };
 
-// Тестовые чипы
-document.querySelectorAll('.sample-chip').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.getElementById('media-url-input').value = btn.dataset.url;
-    document.getElementById('media-title-input').value = btn.dataset.title;
-  });
-});
+  audio.ontimeupdate = () => {
+    if (audio.duration) {
+      progress.style.width = (audio.currentTime / audio.duration * 100) + '%';
+      timeText.innerText = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
+    }
+  };
 
-// --- СИНХРОНИЗАЦИЯ ЧЕРЕЗ СОКЕТЫ ---
+  audio.onended = () => {
+    btnPlay.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>`;
+    progress.style.width = '0%';
+  };
+
+  bar.onclick = (e) => {
+    if (!audio.duration) return;
+    const rect = bar.getBoundingClientRect();
+    audio.currentTime = ((e.clientX - rect.left) / rect.width) * audio.duration;
+  };
+
+  speedPill.onclick = () => {
+    if (audio.playbackRate === 1) audio.playbackRate = 1.5;
+    else if (audio.playbackRate === 1.5) audio.playbackRate = 2;
+    else audio.playbackRate = 1;
+    speedPill.innerText = audio.playbackRate + 'x';
+  };
+}
+
+// --- 8. СОКЕТЫ И СЕТЕВАЯ СИНХРОНИЗАЦИЯ ---
 if (socket) {
-  socket.on('init_state', ({ roomState, messages }) => {
-    if (roomState.mode === 'webrtc_stream' && roomState.broadcasterId) {
-      switchToScreenMode();
-    } else if (roomState.videoUrl) {
+  socket.on('init_state', ({ roomState, messages, myId: id, isHost: hostFlag }) => {
+    myId = id;
+    isHost = hostFlag;
+    currentHostId = roomState.hostId;
+    updateHostUI();
+
+    if (roomState.videoUrl) {
       loadMediaSource(roomState.videoUrl);
       setTimeout(() => {
         setPlayerTime(roomState.currentTime || 0);
         if (roomState.isPlaying) setPlayerState(true);
-      }, 800);
+      }, 700);
     }
+
     updateQueueUI(roomState.queue || []);
-    const scroller = document.getElementById('chat-scroller');
-    scroller.innerHTML = '';
+    updatePeersListUI(roomState.peers || {});
+    chatScroller.innerHTML = '';
     (messages || []).forEach(appendMessageUI);
+  });
+
+  socket.on('host_changed', ({ hostId }) => {
+    currentHostId = hostId;
+    isHost = (myId === hostId);
+    updateHostUI();
+    showToast(isHost ? 'Вы стали ведущим (Хостом)!' : 'Ведущий комнаты сменился');
+  });
+
+  socket.on('sync_player', ({ currentTime, isPlaying }) => {
+    isRemoteAction = true;
+    const cur = getPlayerCurrentTime();
+    if (Math.abs(cur - currentTime) > 0.8) setPlayerTime(currentTime);
+    setPlayerState(isPlaying);
+    setTimeout(() => { isRemoteAction = false; }, 300);
+  });
+
+  socket.on('heartbeat_sync', ({ currentTime, isPlaying }) => {
+    if (isHost) return; // Хост сам генерирует синхронизацию
+    isRemoteAction = true;
+    const cur = getPlayerCurrentTime();
+    const drift = Math.abs(cur - currentTime);
+
+    if (drift > 1.2) {
+      setPlayerTime(currentTime);
+    } else if (drift > 0.35) {
+      video.playbackRate = cur < currentTime ? 1.08 : 0.92;
+    } else {
+      video.playbackRate = 1.0;
+    }
+    setPlayerState(isPlaying);
+    setTimeout(() => { isRemoteAction = false; }, 200);
   });
 
   socket.on('video_switched', ({ url, title }) => {
@@ -364,216 +686,91 @@ if (socket) {
     showToast(`Сейчас играет: ${title}`);
   });
 
-  socket.on('sync_player', ({ currentTime, isPlaying }) => {
-    isRemoteAction = true;
-    const cur = getPlayerCurrentTime();
-    if (Math.abs(cur - currentTime) > 1.5) {
-      setPlayerTime(currentTime);
-    }
-    setPlayerState(isPlaying);
-    setTimeout(() => { isRemoteAction = false; }, 400);
-  });
-
-  socket.on('queue_updated', queue => updateQueueUI(queue));
+  socket.on('chat_message', appendMessageUI);
+  socket.on('queue_updated', updateQueueUI);
+  socket.on('update_peers_list', updatePeersListUI);
 }
+
+function updateHostUI() {
+  document.getElementById('host-badge').style.display = isHost ? 'inline-block' : 'none';
+}
+
+function updatePeersListUI(peers) {
+  const container = document.getElementById('voice-users-list');
+  container.innerHTML = '';
+  Object.entries(peers).forEach(([id, u]) => {
+    const chip = document.createElement('div');
+    chip.className = `voice-user-chip ${u.isMicOn ? 'speaking' : ''}`;
+    chip.innerHTML = `
+      <span class="voice-user-dot ${u.isMicOn ? 'on' : ''}"></span>
+      <span>${escapeHTML(u.username)}</span>
+    `;
+    container.appendChild(chip);
+  });
+}
+
+// Очередь и ссылки
+document.getElementById('btn-play-now').onclick = () => {
+  const url = document.getElementById('media-url-input').value.trim();
+  const title = document.getElementById('media-title-input').value.trim() || url;
+  if (!url) return showToast('Вставьте ссылку');
+  if (socket) socket.emit('change_video_direct', { url, title });
+  document.getElementById('media-url-input').value = '';
+  switchTab('chat');
+};
+
+document.getElementById('btn-add-queue').onclick = () => {
+  const url = document.getElementById('media-url-input').value.trim();
+  const title = document.getElementById('media-title-input').value.trim() || url;
+  if (!url) return showToast('Вставьте ссылку');
+  if (socket) socket.emit('add_to_queue', { url, title });
+  document.getElementById('media-url-input').value = '';
+  showToast('Добавлено в очередь');
+};
+
+document.querySelectorAll('.sample-chip').forEach(btn => {
+  btn.onclick = () => {
+    document.getElementById('media-url-input').value = btn.dataset.url;
+    document.getElementById('media-title-input').value = btn.dataset.title;
+  };
+});
 
 function updateQueueUI(queue) {
-  document.getElementById('queue-count').innerText = queue.length;
-  const container = document.getElementById('queue-items-container');
-  container.innerHTML = '';
-  if (queue.length === 0) {
-    container.innerHTML = '<div class="empty-state">Очередь воспроизведения пуста</div>';
-    return;
-  }
-  queue.forEach(item => {
-    const card = document.createElement('div');
-    card.className = 'queue-card';
-    card.innerHTML = `
+  document.getElementById('queue-badge').innerText = queue.length;
+  const c = document.getElementById('queue-items-container');
+  c.innerHTML = queue.length === 0 ? '<div class="empty-state">Очередь пуста</div>' : '';
+  queue.forEach(it => {
+    const d = document.createElement('div');
+    d.className = 'queue-card';
+    d.innerHTML = `
+      <div><div class="queue-title">${escapeHTML(it.title)}</div></div>
       <div>
-        <div class="queue-title">${escapeHTML(item.title)}</div>
-        <div class="queue-meta">Добавил: ${escapeHTML(item.addedBy)}</div>
-      </div>
-      <div>
-        <button class="btn btn-secondary" onclick="socket.emit('play_queue_item', '${item.id}')">▶</button>
-        <button class="btn btn-secondary" onclick="socket.emit('remove_from_queue', '${item.id}')">✕</button>
+        <button class="btn btn-secondary" onclick="socket.emit('play_queue_item', '${it.id}')">▶</button>
+        <button class="btn btn-secondary" onclick="socket.emit('remove_from_queue', '${it.id}')">✕</button>
       </div>
     `;
-    container.appendChild(card);
+    c.appendChild(d);
   });
 }
 
-document.getElementById('btn-skip-next').addEventListener('click', () => {
+document.getElementById('btn-skip-next').onclick = () => {
   const first = document.querySelector('.queue-card button');
   if (first) first.click();
-});
+};
+video.onended = () => {
+  const first = document.querySelector('.queue-card button');
+  if (first) first.click();
+};
 
-// --- СТРИМ ЭКРАНА (VK, ЛЮБЫЕ САЙТЫ) ---
-document.getElementById('btn-screenshare').addEventListener('click', async () => {
-  try {
-    const screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 30, width: 1280, height: 720 },
-      audio: true
-    });
-    video.style.display = 'none';
-    ytBox.style.display = 'none';
-    streamVideo.style.display = 'block';
-    streamVideo.srcObject = screenStream;
-
-    socket.emit('start_screen_stream');
-    screenStream.getVideoTracks()[0].onended = () => socket.emit('stop_screen_stream');
-    showToast('Трансляция сайта запущена!');
-  } catch (err) {
-    showToast('Захват экрана отменен');
-  }
-});
-
-function switchToScreenMode() {
-  video.style.display = 'none';
-  ytBox.style.display = 'none';
-  streamVideo.style.display = 'block';
-  showToast('Подключение к стриму экрана...');
-}
-
-// --- НАДЕЖНАЯ ЗАПИСЬ ГОЛОСОВЫХ (IOS + ANDROID) ---
-let mediaRecorder;
-let audioChunks = [];
-let voiceTimerInterval;
-let voiceSeconds = 0;
-const btnVoiceToggle = document.getElementById('btn-voice-toggle');
-const voiceBar = document.getElementById('voice-record-bar');
-const voiceTimer = document.getElementById('voice-timer');
-const btnCancelVoice = document.getElementById('btn-cancel-voice');
-
-btnVoiceToggle.addEventListener('click', async () => {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    // Останавливаем и отправляем
-    mediaRecorder.stop();
-    finishVoiceUI();
-  } else {
-    // Начинаем запись
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunks = [];
-      
-      // Автовыбор поддерживаемого формата
-      let mime = 'audio/webm';
-      if (MediaRecorder.isTypeSupported('audio/mp4')) mime = 'audio/mp4'; // iOS Safari
-      else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mime = 'audio/webm;codecs=opus';
-
-      mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
-      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-      mediaRecorder.onstop = () => {
-        if (voiceSeconds >= 1) {
-          const blob = new Blob(audioChunks, { type: mime });
-          const r = new FileReader();
-          r.onload = () => {
-            if (socket) socket.emit('chat_send', { fileData: r.result, fileType: 'audio' });
-          };
-          r.readAsDataURL(blob);
-        }
-      };
-
-      mediaRecorder.start();
-      voiceBar.style.display = 'flex';
-      btnVoiceToggle.classList.add('recording');
-      voiceSeconds = 0;
-      voiceTimer.innerText = '00:00';
-      voiceTimerInterval = setInterval(() => {
-        voiceSeconds++;
-        const m = Math.floor(voiceSeconds / 60);
-        const s = voiceSeconds % 60;
-        voiceTimer.innerText = `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-      }, 1000);
-    } catch (e) {
-      showToast('Доступ к микрофону заблокирован');
-    }
-  }
-});
-
-btnCancelVoice.addEventListener('click', () => {
-  voiceSeconds = 0;
-  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
-  finishVoiceUI();
-  showToast('Запись отменена');
-});
-
-function finishVoiceUI() {
-  clearInterval(voiceTimerInterval);
-  voiceBar.style.display = 'none';
-  btnVoiceToggle.classList.remove('recording');
-}
-
-// --- ЧАТ И ФАЙЛЫ ---
-const chatForm = document.getElementById('chat-form');
-const chatTextInput = document.getElementById('chat-text-input');
-const chatScroller = document.getElementById('chat-scroller');
-const fileInput = document.getElementById('file-input');
-
-chatForm.addEventListener('submit', e => {
-  e.preventDefault();
-  const text = chatTextInput.value.trim();
-  if (text && socket) {
-    socket.emit('chat_send', { text });
-    chatTextInput.value = '';
-  }
-});
-
-fileInput.addEventListener('change', () => {
-  const file = fileInput.files[0];
-  if (!file || !socket) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    let t = 'file';
-    if (file.type.startsWith('image/')) t = 'image';
-    if (file.type.startsWith('video/')) t = 'video';
-    if (file.type.startsWith('audio/')) t = 'audio';
-    socket.emit('chat_send', { fileData: reader.result, fileType: t });
-    fileInput.value = '';
-  };
-  reader.readAsDataURL(file);
-});
-
-if (socket) {
-  socket.on('chat_message', msg => appendMessageUI(msg));
-}
-
-function appendMessageUI(msg) {
-  const div = document.createElement('div');
-  div.className = msg.system ? 'chat-msg system' : 'chat-msg';
-
-  if (msg.system) {
-    div.innerText = msg.text;
-  } else {
-    let media = '';
-    if (msg.fileData) {
-      if (msg.fileType === 'image') media = `<img src="${msg.fileData}" class="msg-media">`;
-      else if (msg.fileType === 'video') media = `<video src="${msg.fileData}" controls class="msg-media"></video>`;
-      else if (msg.fileType === 'audio') media = `<audio src="${msg.fileData}" controls style="width:100%; margin-top:6px;"></audio>`;
-    }
-    div.innerHTML = `
-      <div class="msg-header">
-        <span class="msg-user">${escapeHTML(msg.username)}</span>
-        <span class="msg-time">${msg.time}</span>
-      </div>
-      ${msg.text ? `<div class="msg-text">${escapeHTML(msg.text)}</div>` : ''}
-      ${media}
-    `;
-  }
-  chatScroller.appendChild(div);
-  chatScroller.scrollTop = chatScroller.scrollHeight;
-}
-
-// Табы
-function switchTab(name) {
-  ['chat', 'queue', 'add'].forEach(k => {
-    document.getElementById(`tab-${k}`).classList.toggle('active', k === name);
-    document.getElementById(`view-${k}`).classList.toggle('active', k === name);
+function switchTab(k) {
+  ['chat', 'queue', 'add'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === k);
+    document.getElementById(`view-${t}`).classList.toggle('active', t === k);
   });
 }
 document.getElementById('tab-chat').onclick = () => switchTab('chat');
 document.getElementById('tab-queue').onclick = () => switchTab('queue');
 document.getElementById('tab-add').onclick = () => switchTab('add');
-document.getElementById('btn-toggle-queue').onclick = () => switchTab('queue');
 
 function escapeHTML(s) {
   return String(s).replace(/[&<>'"]/g, t => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[t] || t));
