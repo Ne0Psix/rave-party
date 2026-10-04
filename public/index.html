@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Rave Web Ultimate Party</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Оверлей активации iOS (Safari Audio Context Unlock) -->
+  <div id="unlock-modal" class="modal-overlay">
+    <div class="modal-card">
+      <h2>🎬 Rave Ultimate</h2>
+      <p>Синхронный просмотр видео, фильмов и сайтов с чатом и голосовой связью.</p>
+      <input type="text" id="username-input" placeholder="Введите ваш никнейм..." maxlength="24">
+      <button id="btn-enter" class="btn btn-primary">Присоединиться к просмотру</button>
+    </div>
+  </div>
+
+  <!-- Главный контейнер -->
+  <div class="app-layout">
+    
+    <!-- ВЕРХНЯЯ ПАНЕЛЬ: Инфо, Шеринг, Голос -->
+    <header class="top-nav">
+      <div class="brand">
+        <span class="live-dot"></span>
+        <span id="room-badge">Комната: ...</span>
+      </div>
+
+      <div class="nav-controls">
+        <button id="btn-mic" class="btn btn-icon" title="Вкл/Выкл микрофон">🎤</button>
+        <button id="btn-screenshare" class="btn btn-icon" title="Транслировать вкладку/сайт (VK, фильмы)">🖥️ Стрим сайта</button>
+        <button id="btn-copy-invite" class="btn btn-primary btn-sm">🔗 Скопировать ссылку</button>
+      </div>
+    </header>
+
+    <!-- СРЕДНЯЯ СЕКЦИЯ: Плеер + Чат/Очередь -->
+    <main class="main-body">
+      
+      <!-- СЕКЦИЯ ПЛЕЕРА -->
+      <section class="player-wrapper" id="player-container">
+        
+        <!-- Видео-элемент (playsinline для iOS) -->
+        <video id="main-video" playsinline webkit-playsinline></video>
+        <video id="stream-video" playsinline webkit-playsinline autoplay style="display:none;"></video>
+
+        <!-- Кастомные оверлей-кнопки плеера -->
+        <div class="player-controls">
+          <div class="progress-bar-container" id="seek-bar">
+            <div class="progress-bar-fill" id="seek-fill"></div>
+          </div>
+
+          <div class="controls-row">
+            <div class="left-ctrls">
+              <button id="btn-play-pause" class="btn-ctrl">▶</button>
+              <button id="btn-backward" class="btn-ctrl" title="-10 сек">⏪ 10s</button>
+              <button id="btn-forward" class="btn-ctrl" title="+10 сек">10s ⏩</button>
+              <button id="btn-skip-next" class="btn-ctrl" title="Следующее из очереди">⏭</button>
+              <span id="time-display">00:00 / 00:00</span>
+            </div>
+
+            <div class="right-ctrls">
+              <button id="btn-toggle-queue" class="btn-ctrl">📋 Очередь (<span id="queue-count">0</span>)</button>
+              <button id="btn-fullscreen" class="btn-ctrl">⛶</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ПРАВАЯ/НИЖНЯЯ СЕКЦИЯ: Чат и Очередь -->
+      <aside class="sidebar-wrapper">
+        
+        <!-- Вкладки сайдбара -->
+        <div class="sidebar-tabs">
+          <button id="tab-chat" class="tab-btn active">Чат</button>
+          <button id="tab-queue" class="tab-btn">Очередь видео</button>
+          <button id="tab-add" class="tab-btn">+ Добавить медиа</button>
+        </div>
+
+        <!-- КОНТЕНТ ВКЛАДКИ 1: ЧАТ -->
+        <div id="view-chat" class="tab-view active">
+          <div class="chat-messages" id="chat-scroller">
+            <!-- Сообщения генерируются скриптом -->
+          </div>
+
+          <!-- Быстрая панель эмодзи -->
+          <div class="emoji-bar">
+            <span class="emoji-btn">😀</span>
+            <span class="emoji-btn">😂</span>
+            <span class="emoji-btn">❤️</span>
+            <span class="emoji-btn">🔥</span>
+            <span class="emoji-btn">👏</span>
+            <span class="emoji-btn">🍿</span>
+            <span class="emoji-btn">🚀</span>
+          </div>
+
+          <!-- Форма отправки сообщений и медиа -->
+          <form id="chat-form" class="chat-input-panel">
+            <label class="btn-attach" title="Прикрепить фото, видео или аудио">
+              📎
+              <input type="file" id="file-input" accept="image/*,video/*,audio/*" style="display:none;">
+            </label>
+            <button type="button" id="btn-voice-record" class="btn-voice" title="Зажать для записи голосового">🎙️</button>
+            <input type="text" id="chat-text-input" placeholder="Написать сообщение..." autocomplete="off">
+            <button type="submit" class="btn btn-send">➤</button>
+          </form>
+        </div>
+
+        <!-- КОНТЕНТ ВКЛАДКИ 2: ОЧЕРЕДЬ -->
+        <div id="view-queue" class="tab-view">
+          <div class="queue-list" id="queue-items-container">
+            <div class="empty-state">Очередь пуста. Добавьте ссылки во вкладке «+ Добавить медиа».</div>
+          </div>
+        </div>
+
+        <!-- КОНТЕНТ ВКЛАДКИ 3: ДОБАВИТЬ МЕДИА -->
+        <div id="view-add" class="tab-view">
+          <div class="add-media-form">
+            <h3>Включить видео</h3>
+            <p class="subtitle">Вставьте прямую ссылку на видео, фильм или HLS (.mp4, .m3u8, webm)</p>
+            
+            <input type="text" id="media-url-input" placeholder="https://site.com/video.mp4">
+            <input type="text" id="media-title-input" placeholder="Название фильма/ролика (опционально)">
+
+            <div class="btn-group">
+              <button id="btn-play-now" class="btn btn-primary">Включить сейчас</button>
+              <button id="btn-add-queue" class="btn btn-secondary">+ В очередь</button>
+            </div>
+
+            <hr style="border:0; border-top:1px solid #2b2d42; margin: 20px 0;">
+
+            <h3>Смотреть с любого сайта (VK, Кинопоиск, Аниме)</h3>
+            <p class="subtitle">Нажмите «🖥️ Стрим сайта» в верхнем меню. Выберите вкладку браузера с видео со звуком, и все участники будут смотреть ваш стрим!</p>
+          </div>
+        </div>
+
+      </aside>
+    </main>
+
+  </div>
+
+  <!-- Аудио-контейнер для голосов участников (WebRTC Voice) -->
+  <div id="voice-peers-audio" style="display:none;"></div>
+
+  <!-- Уведомления (Toast) -->
+  <div id="toast" class="toast">Уведомление</div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
