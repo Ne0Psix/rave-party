@@ -1,0 +1,13 @@
+{
+  "name": "rave-ultimate-sync",
+  "version": "1.0.0",
+  "description": "Full-featured watch party with voice chat, queue, media chat and screen share",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
