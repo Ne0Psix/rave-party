@@ -1,27 +1,43 @@
-const socket = io();
-
-// --- ПАРАМЕТРЫ URL И КОМНАТЫ ---
-const urlParams = new URLSearchParams(window.location.search);
-let roomId = urlParams.get('room');
-if (!roomId) {
-  roomId = 'rave_' + Math.random().toString(36).substring(2, 8);
-  window.history.replaceState(null, '', `?room=${roomId}`);
+// Безопасное подключение к сокетам
+let socket;
+try {
+  socket = io();
+} catch (e) {
+  console.error("Ошибка инициализации Socket.IO:", e);
 }
 
-document.getElementById('room-badge').innerText = `Комната: ${roomId}`;
+// 1. Генерация и парсинг комнаты
+let roomId = 'party_1';
+try {
+  const urlParams = new URLSearchParams(window.location.search);
+  const paramRoom = urlParams.get('room');
+  if (paramRoom) {
+    roomId = paramRoom;
+  } else {
+    roomId = 'room_' + Math.random().toString(36).substring(2, 8);
+    if (window.history && window.history.replaceState && window.location.protocol.startsWith('http')) {
+      window.history.replaceState(null, '', `?room=${roomId}`);
+    }
+  }
+} catch (err) {
+  console.warn("URL State fallback:", err);
+}
+
+const badge = document.getElementById('room-badge');
+if (badge) badge.innerText = `Комната: ${roomId}`;
 
 let myUsername = 'Гость';
 let serverTimeDelta = 0;
 let isRemoteAction = false;
-let currentMode = 'file'; // 'file' или 'webrtc_stream'
+let currentMode = 'file';
 
-// WebRTC Voice Mesh & Screen Share State
+// WebRTC State
 let localStreamVoice = null;
 let isMicMuted = true;
-const voicePeers = {}; // peerId -> RTCPeerConnection
+const voicePeers = {};
 let screenSenderPeer = null;
 
-// Элементы интерфейса
+// Элементы
 const video = document.getElementById('main-video');
 const streamVideo = document.getElementById('stream-video');
 const btnPlayPause = document.getElementById('btn-play-pause');
@@ -35,96 +51,122 @@ const btnCopyInvite = document.getElementById('btn-copy-invite');
 const btnMic = document.getElementById('btn-mic');
 const btnScreenShare = document.getElementById('btn-screenshare');
 
-// --- 1. NTP КАЛИБРОВКА (СИНХРОНИЗАЦИЯ ЧАСОВ) ---
-function pingServerClock() {
-  const sendTime = Date.now();
-  socket.emit('sync_ntp', sendTime);
-}
-socket.on('sync_ntp_response', ({ clientTimestamp, serverTimestamp }) => {
-  const now = Date.now();
-  const latency = (now - clientTimestamp) / 2;
-  serverTimeDelta = serverTimestamp - (now - latency);
-});
-setInterval(pingServerClock, 8000);
-pingServerClock();
+// --- НАДЕЖНЫЙ ВХОД В КОМНАТУ (БЕЗ ЗАВИСАНИЙ) ---
+function handleUserJoin() {
+  myUsername = usernameInput.value.trim() || ('Участник_' + Math.floor(Math.random() * 900 + 100));
 
-// --- 2. ВХОД И РАЗБЛОКИРОВКА iOS SAFARI ---
-btnEnter.addEventListener('click', async () => {
-  myUsername = usernameInput.value.trim() || 'Пользователь_' + Math.floor(Math.random() * 100);
-  
-  // Проигрываем и сразу ставим на паузу — обязательный жест разблокировки аудио в iOS Safari
-  try {
-    await video.play();
-    video.pause();
-  } catch (e) {
-    console.log('Audio unlock pass');
-  }
-
+  // Закрываем окно СРАЗУ
   unlockModal.style.display = 'none';
-  socket.emit('join_room', { roomId, username: myUsername });
+
+  // Разблокируем звук для iOS/Safari
+  try {
+    const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+    silentAudio.play().catch(() => {});
+  } catch (e) {}
+
+  // Отправляем запрос на сервер
+  if (socket) {
+    if (socket.connected) {
+      socket.emit('join_room', { roomId, username: myUsername });
+    } else {
+      socket.on('connect', () => {
+        socket.emit('join_room', { roomId, username: myUsername });
+      });
+    }
+  }
+  showToast(`Добро пожаловать, ${myUsername}!`);
+}
+
+btnEnter.addEventListener('click', handleUserJoin);
+usernameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') handleUserJoin();
 });
 
-// Скопировать уникальную ссылку
+// Скопировать ссылку
 btnCopyInvite.addEventListener('click', () => {
-  navigator.clipboard.writeText(window.location.href);
-  showToast('Ссылка скопирована! Отправьте её друзьям.');
+  const shareUrl = window.location.href;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      showToast('Ссылка скопирована!');
+    }).catch(() => promptFallback(shareUrl));
+  } else {
+    promptFallback(shareUrl);
+  }
 });
+
+function promptFallback(text) {
+  prompt("Скопируйте ссылку на комнату:", text);
+}
 
 function showToast(text) {
   const toast = document.getElementById('toast');
+  if (!toast) return;
   toast.innerText = text;
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 3000);
+  setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-// --- 3. ИНИЦИАЛИЗАЦИЯ И СИНХРОНИЗАЦИЯ ПЛЕЕРА ---
-socket.on('init_state', ({ roomState, messages }) => {
-  currentMode = roomState.mode;
+// --- СИНХРОНИЗАЦИЯ СЕРВЕРНОГО ВРЕМЕНИ ---
+if (socket) {
+  socket.on('sync_ntp_response', ({ clientTimestamp, serverTimestamp }) => {
+    const now = Date.now();
+    const latency = (now - clientTimestamp) / 2;
+    serverTimeDelta = serverTimestamp - (now - latency);
+  });
+  setInterval(() => socket.emit('sync_ntp', Date.now()), 10000);
+}
 
-  if (currentMode === 'webrtc_stream' && roomState.broadcasterId) {
-    switchToScreenMode(roomState.broadcasterId);
-  } else {
-    video.src = roomState.videoUrl;
-    video.currentTime = roomState.currentTime;
-    if (roomState.isPlaying) video.play().catch(() => {});
-  }
+// --- ПРИЕМ СОСТОЯНИЯ КОМНАТЫ ---
+if (socket) {
+  socket.on('init_state', ({ roomState, messages }) => {
+    currentMode = roomState.mode;
 
-  updateQueueUI(roomState.queue);
-  messages.forEach(appendMessageUI);
-});
+    if (currentMode === 'webrtc_stream' && roomState.broadcasterId) {
+      switchToScreenMode();
+    } else {
+      if (roomState.videoUrl && video.src !== roomState.videoUrl) {
+        video.src = roomState.videoUrl;
+      }
+      video.currentTime = roomState.currentTime || 0;
+      if (roomState.isPlaying) video.play().catch(() => {});
+    }
 
-// Обработка действий Хоста/Участников
-socket.on('sync_player', ({ currentTime, isPlaying, serverTimestamp }) => {
-  if (currentMode !== 'file') return;
-  isRemoteAction = true;
+    updateQueueUI(roomState.queue || []);
+    const scroller = document.getElementById('chat-scroller');
+    scroller.innerHTML = '';
+    (messages || []).forEach(appendMessageUI);
+  });
 
-  const currentServerTime = Date.now() + serverTimeDelta;
-  const transitLag = Math.max(0, (currentServerTime - serverTimestamp) / 1000);
-  const targetTimeline = isPlaying ? currentTime + transitLag : currentTime;
+  socket.on('sync_player', ({ currentTime, isPlaying, serverTimestamp }) => {
+    if (currentMode !== 'file') return;
+    isRemoteAction = true;
 
-  const drift = Math.abs(video.currentTime - targetTimeline);
+    const currentServerTime = Date.now() + serverTimeDelta;
+    const transitLag = Math.max(0, (currentServerTime - serverTimestamp) / 1000);
+    const targetTimeline = isPlaying ? currentTime + transitLag : currentTime;
 
-  // Мягкая микро-подстройка скорости без дерганий
-  if (drift > 1.5) {
-    video.currentTime = targetTimeline;
-  } else if (drift > 0.25) {
-    video.playbackRate = video.currentTime < targetTimeline ? 1.05 : 0.95;
-  } else {
-    video.playbackRate = 1.0;
-  }
+    const drift = Math.abs(video.currentTime - targetTimeline);
 
-  if (isPlaying && video.paused) {
-    video.play().catch(() => {});
-  } else if (!isPlaying && !video.paused) {
-    video.pause();
-  }
+    if (drift > 1.5) {
+      video.currentTime = targetTimeline;
+    } else if (drift > 0.25) {
+      video.playbackRate = video.currentTime < targetTimeline ? 1.05 : 0.95;
+    } else {
+      video.playbackRate = 1.0;
+    }
 
-  setTimeout(() => { isRemoteAction = false; }, 300);
-});
+    if (isPlaying && video.paused) {
+      video.play().catch(() => {});
+    } else if (!isPlaying && !video.paused) {
+      video.pause();
+    }
 
-// Отправка действий плеера
+    setTimeout(() => { isRemoteAction = false; }, 300);
+  });
+}
+
 function emitPlayerAction() {
-  if (isRemoteAction || currentMode !== 'file') return;
+  if (isRemoteAction || currentMode !== 'file' || !socket) return;
   socket.emit('player_action', {
     currentTime: video.currentTime,
     isPlaying: !video.paused
@@ -132,7 +174,7 @@ function emitPlayerAction() {
 }
 
 btnPlayPause.addEventListener('click', () => {
-  if (video.paused) video.play(); else video.pause();
+  if (video.paused) video.play().catch(() => {}); else video.pause();
   emitPlayerAction();
 });
 
@@ -155,7 +197,6 @@ document.getElementById('btn-forward').addEventListener('click', () => {
   emitPlayerAction();
 });
 
-// Таймлайн бар
 video.addEventListener('timeupdate', () => {
   if (!video.duration) return;
   const perc = (video.currentTime / video.duration) * 100;
@@ -177,24 +218,23 @@ function formatTime(s) {
   return `${m < 10 ? '0' : ''}${m}:${sec < 10 ? '0' : ''}${sec}`;
 }
 
-// Полноэкранный режим
 document.getElementById('btn-fullscreen').addEventListener('click', () => {
   const container = document.getElementById('player-container');
   if (!document.fullscreenElement) {
     if (container.requestFullscreen) container.requestFullscreen();
-    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); // Safari iOS fallback
+    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
   } else {
     document.exitFullscreen();
   }
 });
 
-// --- 4. ОЧЕРЕДЬ ВОСПРОИЗВЕДЕНИЯ ---
+// --- ОЧЕРЕДЬ ---
 document.getElementById('btn-play-now').addEventListener('click', () => {
   const url = document.getElementById('media-url-input').value.trim();
   const title = document.getElementById('media-title-input').value.trim();
-  if (!url) return showToast('Введите URL медиа');
+  if (!url) return showToast('Вставьте ссылку');
 
-  socket.emit('change_video_direct', { url, title });
+  if (socket) socket.emit('change_video_direct', { url, title });
   document.getElementById('media-url-input').value = '';
   document.getElementById('media-title-input').value = '';
   switchTab('chat');
@@ -203,27 +243,27 @@ document.getElementById('btn-play-now').addEventListener('click', () => {
 document.getElementById('btn-add-queue').addEventListener('click', () => {
   const url = document.getElementById('media-url-input').value.trim();
   const title = document.getElementById('media-title-input').value.trim();
-  if (!url) return showToast('Введите URL медиа');
+  if (!url) return showToast('Вставьте ссылку');
 
-  socket.emit('add_to_queue', { url, title });
+  if (socket) socket.emit('add_to_queue', { url, title });
   document.getElementById('media-url-input').value = '';
   document.getElementById('media-title-input').value = '';
-  showToast('Добавлено в очередь!');
+  showToast('Добавлено в очередь');
 });
 
-socket.on('video_switched', ({ url, title, mode }) => {
-  currentMode = mode;
-  streamVideo.style.display = 'none';
-  video.style.display = 'block';
+if (socket) {
+  socket.on('video_switched', ({ url, title, mode }) => {
+    currentMode = mode;
+    streamVideo.style.display = 'none';
+    video.style.display = 'block';
 
-  video.src = url;
-  video.play().catch(() => {});
-  showToast(`Сейчас играет: ${title}`);
-});
+    video.src = url;
+    video.play().catch(() => {});
+    showToast(`Включено: ${title}`);
+  });
 
-socket.on('queue_updated', (queue) => {
-  updateQueueUI(queue);
-});
+  socket.on('queue_updated', (queue) => updateQueueUI(queue));
+}
 
 function updateQueueUI(queue) {
   document.getElementById('queue-count').innerText = queue.length;
@@ -231,7 +271,7 @@ function updateQueueUI(queue) {
   container.innerHTML = '';
 
   if (queue.length === 0) {
-    container.innerHTML = '<div class="empty-state">Очередь пуста.</div>';
+    container.innerHTML = '<div class="empty-state">Очередь пуста</div>';
     return;
   }
 
@@ -244,39 +284,38 @@ function updateQueueUI(queue) {
         <div class="queue-meta">Добавил: ${escapeHTML(item.addedBy)}</div>
       </div>
       <div>
-        <button class="btn btn-primary btn-sm" onclick="playQueueItem('${item.id}')">Включить</button>
-        <button class="btn btn-secondary btn-sm" onclick="removeQueueItem('${item.id}')">✕</button>
+        <button class="btn btn-secondary" style="padding:4px 8px; margin-right:4px;" onclick="playQueueItem('${item.id}')">▶</button>
+        <button class="btn btn-secondary" style="padding:4px 8px;" onclick="removeQueueItem('${item.id}')">✕</button>
       </div>
     `;
     container.appendChild(card);
   });
 }
 
-window.playQueueItem = (id) => socket.emit('play_queue_item', id);
-window.removeQueueItem = (id) => socket.emit('remove_from_queue', id);
+window.playQueueItem = (id) => socket && socket.emit('play_queue_item', id);
+window.removeQueueItem = (id) => socket && socket.emit('remove_from_queue', id);
 
 document.getElementById('btn-skip-next').addEventListener('click', () => {
   const first = document.querySelector('.queue-card button');
   if (first) first.click();
 });
 
-// Автопереход к следующему видео по окончании
 video.addEventListener('ended', () => {
   const first = document.querySelector('.queue-card button');
   if (first) first.click();
 });
 
-// --- 5. СТРИМ ЭКРАНА / ВКЛАДОК (VK, САЙТЫ, КИНОПОИСК) ЧЕРЕЗ WEBRTC ---
+// --- СТРИМ ЭКРАНА (VK, ЛЮБЫЕ САЙТЫ) ---
 btnScreenShare.addEventListener('click', async () => {
   if (currentMode === 'webrtc_stream') {
-    socket.emit('stop_screen_stream');
+    if (socket) socket.emit('stop_screen_stream');
     return;
   }
 
   try {
     const screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: 30, width: 1280, height: 720 },
-      audio: true // Захватывает звук вкладки браузера
+      audio: true
     });
 
     video.style.display = 'none';
@@ -285,60 +324,52 @@ btnScreenShare.addEventListener('click', async () => {
 
     currentMode = 'webrtc_stream';
     btnScreenShare.classList.add('active');
-    btnScreenShare.innerText = '⏹ Остановить стрим';
+    btnScreenShare.innerText = '⏹ Стоп стрим';
 
-    socket.emit('start_screen_stream');
-
-    screenStream.getVideoTracks()[0].onended = () => {
-      socket.emit('stop_screen_stream');
-    };
-
-    // При подключении новых зрителей транслируем им захваченный поток
-    socket.on('peer_joined', async ({ peerId }) => {
-      initiateScreenPeerConnection(peerId, screenStream);
-    });
-
+    if (socket) {
+      socket.emit('start_screen_stream');
+      screenStream.getVideoTracks()[0].onended = () => socket.emit('stop_screen_stream');
+      socket.on('peer_joined', ({ peerId }) => initiateScreenPeer(peerId, screenStream));
+    }
   } catch (err) {
-    showToast('Захват экрана отменен или не поддерживается');
+    showToast('Стрим отменен');
   }
 });
 
-socket.on('screen_stream_started', ({ broadcasterId }) => {
-  if (broadcasterId !== socket.id) {
-    switchToScreenMode(broadcasterId);
-  }
-});
+if (socket) {
+  socket.on('screen_stream_started', ({ broadcasterId }) => {
+    if (broadcasterId !== socket.id) switchToScreenMode();
+  });
 
-socket.on('screen_stream_stopped', ({ fallbackUrl }) => {
-  currentMode = 'file';
-  streamVideo.style.display = 'none';
-  video.style.display = 'block';
-  btnScreenShare.classList.remove('active');
-  btnScreenShare.innerText = '🖥️ Стрим сайта';
-  if (fallbackUrl) video.src = fallbackUrl;
-});
+  socket.on('screen_stream_stopped', ({ fallbackUrl }) => {
+    currentMode = 'file';
+    streamVideo.style.display = 'none';
+    video.style.display = 'block';
+    btnScreenShare.classList.remove('active');
+    btnScreenShare.innerText = '🖥️ Стрим сайта';
+    if (fallbackUrl) video.src = fallbackUrl;
+  });
+}
 
-function switchToScreenMode(broadcasterId) {
+function switchToScreenMode() {
   currentMode = 'webrtc_stream';
   video.style.display = 'none';
   streamVideo.style.display = 'block';
-  showToast('Подключение к трансляции сайта...');
+  showToast('Подключение к трансляции экрана...');
 }
 
-// --- 6. ГОЛОСОВАЯ СВЯЗЬ WEBRTC MESH ---
-const rtcConfig = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }]
-};
+// --- ГОЛОСОВОЙ ЧАТ WEBRTC ---
+const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 btnMic.addEventListener('click', async () => {
   if (!localStreamVoice) {
     try {
-      localStreamVoice = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStreamVoice = await navigator.mediaDevices.getUserMedia({ audio: true });
       isMicMuted = false;
       btnMic.classList.add('active');
       showToast('Микрофон включен');
     } catch (e) {
-      return showToast('Доступ к микрофону заблокирован');
+      return showToast('Нет доступа к микрофону');
     }
   } else {
     isMicMuted = !isMicMuted;
@@ -348,107 +379,88 @@ btnMic.addEventListener('click', async () => {
   }
 });
 
-socket.on('peer_joined', async ({ peerId }) => {
-  // Инициируем голосовое P2P соединение
-  const pc = createVoicePeerConnection(peerId);
-  if (localStreamVoice) {
-    localStreamVoice.getTracks().forEach(t => pc.addTrack(t, localStreamVoice));
-  }
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  socket.emit('signal_relay', { targetPeerId: peerId, signal: pc.localDescription, type: 'voice' });
-});
+if (socket) {
+  socket.on('peer_joined', async ({ peerId }) => {
+    const pc = createVoicePeer(peerId);
+    if (localStreamVoice) {
+      localStreamVoice.getTracks().forEach(t => pc.addTrack(t, localStreamVoice));
+    }
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit('signal_relay', { targetPeerId: peerId, signal: pc.localDescription, type: 'voice' });
+  });
 
-socket.on('signal_relay_received', async ({ senderPeerId, signal, type }) => {
-  if (type === 'voice') {
-    let pc = voicePeers[senderPeerId];
-    if (!pc) {
-      pc = createVoicePeerConnection(senderPeerId);
+  socket.on('signal_relay_received', async ({ senderPeerId, signal, type }) => {
+    if (type === 'voice') {
+      let pc = voicePeers[senderPeerId] || createVoicePeer(senderPeerId);
       if (localStreamVoice) {
         localStreamVoice.getTracks().forEach(t => pc.addTrack(t, localStreamVoice));
       }
+      if (signal.type === 'offer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('signal_relay', { targetPeerId: senderPeerId, signal: pc.localDescription, type: 'voice' });
+      } else if (signal.type === 'answer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal));
+      } else if (signal.candidate) {
+        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+      }
     }
 
-    if (signal.type === 'offer') {
-      await pc.setRemoteDescription(new RTCSessionDescription(signal));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit('signal_relay', { targetPeerId: senderPeerId, signal: pc.localDescription, type: 'voice' });
-    } else if (signal.type === 'answer') {
-      await pc.setRemoteDescription(new RTCSessionDescription(signal));
-    } else if (signal.candidate) {
-      await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+    if (type === 'screen') {
+      if (!screenSenderPeer) {
+        screenSenderPeer = new RTCPeerConnection(rtcConfig);
+        screenSenderPeer.ontrack = (e) => streamVideo.srcObject = e.streams[0];
+        screenSenderPeer.onicecandidate = (e) => {
+          if (e.candidate) socket.emit('signal_relay', { targetPeerId: senderPeerId, signal: { candidate: e.candidate }, type: 'screen' });
+        };
+      }
+      if (signal.type === 'offer') {
+        await screenSenderPeer.setRemoteDescription(new RTCSessionDescription(signal));
+        const ans = await screenSenderPeer.createAnswer();
+        await screenSenderPeer.setLocalDescription(ans);
+        socket.emit('signal_relay', { targetPeerId: senderPeerId, signal: screenSenderPeer.localDescription, type: 'screen' });
+      } else if (signal.type === 'answer') {
+        await screenSenderPeer.setRemoteDescription(new RTCSessionDescription(signal));
+      } else if (signal.candidate) {
+        await screenSenderPeer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+      }
     }
-  }
+  });
+}
 
-  // Прием трансляции экрана зрителями
-  if (type === 'screen') {
-    if (!screenSenderPeer) {
-      screenSenderPeer = new RTCPeerConnection(rtcConfig);
-      screenSenderPeer.ontrack = (event) => {
-        streamVideo.srcObject = event.streams[0];
-      };
-      screenSenderPeer.onicecandidate = (e) => {
-        if (e.candidate) socket.emit('signal_relay', { targetPeerId: senderPeerId, signal: { candidate: e.candidate }, type: 'screen' });
-      };
-    }
-
-    if (signal.type === 'offer') {
-      await screenSenderPeer.setRemoteDescription(new RTCSessionDescription(signal));
-      const ans = await screenSenderPeer.createAnswer();
-      await screenSenderPeer.setLocalDescription(ans);
-      socket.emit('signal_relay', { targetPeerId: senderPeerId, signal: screenSenderPeer.localDescription, type: 'screen' });
-    } else if (signal.candidate) {
-      await screenSenderPeer.addIceCandidate(new RTCIceCandidate(signal.candidate));
-    }
-  }
-});
-
-function createVoicePeerConnection(peerId) {
+function createVoicePeer(peerId) {
   const pc = new RTCPeerConnection(rtcConfig);
   voicePeers[peerId] = pc;
-
   pc.onicecandidate = (e) => {
-    if (e.candidate) socket.emit('signal_relay', { targetPeerId: peerId, signal: { candidate: e.candidate }, type: 'voice' });
+    if (e.candidate && socket) socket.emit('signal_relay', { targetPeerId: peerId, signal: { candidate: e.candidate }, type: 'voice' });
   };
-
   pc.ontrack = (e) => {
-    let audioElem = document.getElementById(`audio_${peerId}`);
-    if (!audioElem) {
-      audioElem = document.createElement('audio');
-      audioElem.id = `audio_${peerId}`;
-      audioElem.autoplay = true;
-      document.getElementById('voice-peers-audio').appendChild(audioElem);
+    let aud = document.getElementById(`audio_${peerId}`);
+    if (!aud) {
+      aud = document.createElement('audio');
+      aud.id = `audio_${peerId}`;
+      aud.autoplay = true;
+      document.getElementById('voice-peers-audio').appendChild(aud);
     }
-    audioElem.srcObject = e.streams[0];
+    aud.srcObject = e.streams[0];
   };
-
   return pc;
 }
 
-async function initiateScreenPeerConnection(watcherId, stream) {
+async function initiateScreenPeer(watcherId, stream) {
   const pc = new RTCPeerConnection(rtcConfig);
   stream.getTracks().forEach(t => pc.addTrack(t, stream));
-
   pc.onicecandidate = (e) => {
-    if (e.candidate) socket.emit('signal_relay', { targetPeerId: watcherId, signal: { candidate: e.candidate }, type: 'screen' });
+    if (e.candidate && socket) socket.emit('signal_relay', { targetPeerId: watcherId, signal: { candidate: e.candidate }, type: 'screen' });
   };
-
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  socket.emit('signal_relay', { targetPeerId: watcherId, signal: pc.localDescription, type: 'screen' });
+  if (socket) socket.emit('signal_relay', { targetPeerId: watcherId, signal: pc.localDescription, type: 'screen' });
 }
 
-socket.on('peer_left', ({ peerId }) => {
-  if (voicePeers[peerId]) {
-    voicePeers[peerId].close();
-    delete voicePeers[peerId];
-  }
-  const aud = document.getElementById(`audio_${peerId}`);
-  if (aud) aud.remove();
-});
-
-// --- 7. ЧАТ, ПРИКРЕПЛЕНИЕ МЕДИА И ГОЛОСОВЫЕ СООБЩЕНИЯ ---
+// --- ЧАТ И МЕДИА ---
 const chatForm = document.getElementById('chat-form');
 const chatTextInput = document.getElementById('chat-text-input');
 const chatScroller = document.getElementById('chat-scroller');
@@ -458,16 +470,15 @@ const btnVoiceRecord = document.getElementById('btn-voice-record');
 chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = chatTextInput.value.trim();
-  if (text) {
+  if (text && socket) {
     socket.emit('chat_send', { text });
     chatTextInput.value = '';
   }
 });
 
-// Отправка фото / видео / файлов
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
-  if (!file) return;
+  if (!file || !socket) return;
 
   const reader = new FileReader();
   reader.onload = () => {
@@ -506,18 +517,20 @@ async function startVoiceRecord(e) {
       const blob = new Blob(audioChunks, { type: 'audio/webm' });
       const r = new FileReader();
       r.onload = () => {
-        socket.emit('chat_send', {
-          fileData: r.result,
-          fileName: 'Голосовое сообщение',
-          fileType: 'audio'
-        });
+        if (socket) {
+          socket.emit('chat_send', {
+            fileData: r.result,
+            fileName: 'Голосовое',
+            fileType: 'audio'
+          });
+        }
       };
       r.readAsDataURL(blob);
     };
     mediaRecorder.start();
     btnVoiceRecord.classList.add('recording');
   } catch (err) {
-    showToast('Ошибка микрофона');
+    showToast('Микрофон недоступен');
   }
 }
 
@@ -529,10 +542,10 @@ function stopVoiceRecord(e) {
   }
 }
 
-// Отрисовка сообщений
-socket.on('chat_message', (msg) => {
-  appendMessageUI(msg);
-});
+if (socket) {
+  socket.on('chat_message', (msg) => appendMessageUI(msg));
+  socket.on('reaction_updated', ({ messageId, reactions }) => renderReactions(messageId, reactions));
+}
 
 function appendMessageUI(msg) {
   const div = document.createElement('div');
@@ -544,13 +557,9 @@ function appendMessageUI(msg) {
   } else {
     let mediaContent = '';
     if (msg.fileData) {
-      if (msg.fileType === 'image') {
-        mediaContent = `<img src="${msg.fileData}" class="msg-media">`;
-      } else if (msg.fileType === 'video') {
-        mediaContent = `<video src="${msg.fileData}" controls class="msg-media"></video>`;
-      } else if (msg.fileType === 'audio') {
-        mediaContent = `<audio src="${msg.fileData}" controls style="width:100%; margin-top:6px;"></audio>`;
-      }
+      if (msg.fileType === 'image') mediaContent = `<img src="${msg.fileData}" class="msg-media">`;
+      else if (msg.fileType === 'video') mediaContent = `<video src="${msg.fileData}" controls class="msg-media"></video>`;
+      else if (msg.fileType === 'audio') mediaContent = `<audio src="${msg.fileData}" controls style="width:100%; margin-top:6px;"></audio>`;
     }
 
     div.innerHTML = `
@@ -563,9 +572,8 @@ function appendMessageUI(msg) {
       <div class="reactions-tray" id="react_${msg.id}"></div>
     `;
 
-    // Клик по сообщению открывает быстрый выбор реакции
     div.addEventListener('dblclick', () => {
-      socket.emit('add_reaction', { messageId: msg.id, emoji: '❤️' });
+      if (socket) socket.emit('add_reaction', { messageId: msg.id, emoji: '❤️' });
     });
   }
 
@@ -574,17 +582,11 @@ function appendMessageUI(msg) {
   if (msg.reactions) renderReactions(msg.id, msg.reactions);
 }
 
-// Быстрые эмодзи
 document.querySelectorAll('.emoji-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     chatTextInput.value += btn.innerText;
     chatTextInput.focus();
   });
-});
-
-// Реакции на сообщения
-socket.on('reaction_updated', ({ messageId, reactions }) => {
-  renderReactions(messageId, reactions);
 });
 
 function renderReactions(messageId, reactions) {
@@ -596,12 +598,12 @@ function renderReactions(messageId, reactions) {
     const pill = document.createElement('span');
     pill.className = `reaction-pill ${users.includes(myUsername) ? 'reacted' : ''}`;
     pill.innerText = `${emoji} ${users.length}`;
-    pill.onclick = () => socket.emit('add_reaction', { messageId, emoji });
+    pill.onclick = () => socket && socket.emit('add_reaction', { messageId, emoji });
     container.appendChild(pill);
   }
 }
 
-// --- 8. ТАБЫ САЙДБАРА ---
+// Табы
 const tabs = {
   chat: { btn: document.getElementById('tab-chat'), view: document.getElementById('view-chat') },
   queue: { btn: document.getElementById('tab-queue'), view: document.getElementById('view-queue') },
@@ -618,7 +620,6 @@ function switchTab(name) {
     tabs[k].view.classList.toggle('active', k === name);
   });
 }
-
 document.getElementById('btn-toggle-queue').addEventListener('click', () => switchTab('queue'));
 
 function escapeHTML(str) {
