@@ -12,8 +12,8 @@
   --text-disabled: #555566;
 
   --accent-white: #ffffff;
-  --msg-self: #202028; /* Темный графит для своих сообщений */
-  --msg-other: #141418; /* Фоновый для чужих сообщений */
+  --msg-self: #202028;
+  --msg-other: #141418;
   
   --danger: #ef4444;
   --success: #10b981;
@@ -72,7 +72,7 @@ body, html {
 .modal-badge {
   display: inline-block;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: 1px;
   padding: 3px 8px;
   border-radius: 6px;
@@ -112,7 +112,13 @@ body, html {
 .btn-icon { background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--text-main); padding: 7px 11px; font-size: 13px; }
 .btn-icon.active { background: var(--success); border-color: var(--success); color: #000; }
 
-.app-layout { display: flex; flex-direction: column; height: 100dvh; }
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
 
 /* Шапка */
 .top-nav {
@@ -125,12 +131,19 @@ body, html {
   padding: 0 14px;
   flex-shrink: 0;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; letter-spacing: -0.2px; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
 .host-badge { background: #eab308; color: #000; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 6px; display: none; }
 .nav-controls { display: flex; gap: 8px; align-items: center; }
 
-.main-body { flex: 1; display: flex; min-height: 0; position: relative; }
+.main-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
 
 /* Плеер */
 .player-wrapper {
@@ -160,7 +173,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.75);
   border: 1px solid rgba(255, 255, 255, 0.2);
   display: flex;
   align-items: center;
@@ -169,7 +182,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   opacity: 0;
   pointer-events: none;
   transform: scale(0.7);
-  transition: all 0.25s ease;
+  transition: all 0.2s ease;
 }
 .state-flash.show { opacity: 1; transform: scale(1); }
 .flash-icon { width: 28px; height: 28px; stroke: #fff; fill: #fff; }
@@ -206,21 +219,21 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .btn-ctrl:hover { background: rgba(255, 255, 255, 0.1); }
 #time-display { font-size: 12px; color: var(--text-secondary); margin-left: 4px; font-variant-numeric: tabular-nums; }
 
-/* Меню дорожек / настроек */
+/* Меню настроек плеера */
 .settings-menu {
   position: absolute;
   right: 14px;
   bottom: 60px;
   background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-focus);
   border-radius: 12px;
   padding: 14px;
   width: 260px;
   display: none;
   flex-direction: column;
   gap: 12px;
-  z-index: 20;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+  z-index: 99;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.9);
 }
 .settings-menu.open { display: flex; }
 .settings-header { font-size: 13px; font-weight: 700; color: var(--text-main); border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px; }
@@ -229,7 +242,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: #fff;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-radius: 6px;
   font-size: 12px;
   outline: none;
@@ -244,9 +257,11 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   display: flex;
   flex-direction: column;
   min-width: 300px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
-/* Полоса голосового чата */
 .voice-strip {
   padding: 6px 12px;
   background: var(--bg-black);
@@ -255,6 +270,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   align-items: center;
   gap: 8px;
   overflow-x: auto;
+  flex-shrink: 0;
 }
 .voice-strip-title { font-size: 11px; font-weight: 600; color: var(--text-disabled); }
 .voice-users { display: flex; gap: 6px; align-items: center; }
@@ -272,17 +288,34 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .voice-user-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-disabled); }
 .voice-user-dot.on { background: var(--success); }
 
-.sidebar-tabs { display: flex; border-bottom: 1px solid var(--border-subtle); background: var(--bg-black); }
-.tab-btn { flex: 1; padding: 12px; background: none; border: none; color: var(--text-secondary); font-size: 13px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; }
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-black);
+  flex-shrink: 0;
+}
+.tab-btn {
+  flex: 1;
+  padding: 12px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
 .tab-btn.active { color: var(--text-main); border-bottom-color: var(--accent-white); background: var(--bg-surface); }
 
-.tab-view { display: none; flex: 1; flex-direction: column; min-height: 0; }
+.tab-view { display: none; flex: 1; flex-direction: column; min-height: 0; height: 100%; overflow: hidden; }
 .tab-view.active { display: flex; }
 
-/* ЧАТ — РАЗДЕЛЕНИЕ НА ЛЕВОЕ И ПРАВОЕ */
+/* ЧАТ — РАЗДЕЛЕНИЕ НА ЛЕВО И ПРАВО */
 .chat-messages {
-  flex: 1;
+  flex: 1 1 0%;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -292,8 +325,9 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .chat-msg {
   display: flex;
   flex-direction: column;
-  max-width: 82%;
+  max-width: 84%;
   position: relative;
+  word-break: break-word;
 }
 
 /* Мои сообщения — справа */
@@ -304,7 +338,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   border-radius: 14px 14px 2px 14px;
   padding: 8px 12px;
 }
-.chat-msg.self .msg-user { display: none; } /* Свое имя скрываем, как в телеграме */
+.chat-msg.self .msg-user { display: none; }
 
 /* Чужие сообщения — слева */
 .chat-msg.other {
@@ -325,16 +359,16 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .msg-header { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 3px; gap: 8px; }
 .msg-user { font-weight: 700; color: #a1a1aa; }
 .msg-time { color: var(--text-disabled); font-size: 10px; align-self: flex-end; margin-top: 4px; }
-.msg-text { font-size: 13px; line-height: 1.4; word-break: break-word; color: #fff; }
+.msg-text { font-size: 13px; line-height: 1.4; color: #fff; }
 .msg-media { max-width: 100%; border-radius: 8px; margin-top: 6px; border: 1px solid var(--border-subtle); }
 
-/* КАСТОМНЫЙ ПЛЕЕР ГОЛОСОВОГО СООБЩЕНИЯ */
+/* Плеер голосового сообщения */
 .voice-msg-player {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 0;
-  width: 210px;
+  padding: 4px 0;
+  width: 220px;
 }
 .btn-voice-play {
   width: 36px;
@@ -366,13 +400,14 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   border-top: 1px solid rgba(239, 68, 68, 0.3);
   font-size: 13px;
   color: var(--danger);
+  flex-shrink: 0;
 }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); animation: pulse-rec 1s infinite; }
 .rec-status { flex: 1; }
 .btn-cancel-rec { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
 .btn-send-rec { background: var(--danger); border: none; color: #fff; font-weight: bold; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; }
 
-/* Панель ввода чата */
+/* Панель ввода чата — зафиксирована внизу */
 .chat-input-panel {
   display: flex;
   align-items: center;
@@ -380,6 +415,10 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   background: var(--bg-surface);
   border-top: 1px solid var(--border-subtle);
   gap: 8px;
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
 }
 .chat-input-panel input[type="text"] {
   flex: 1;
