@@ -3,11 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
-  <title>Rave Sync Studio</title>
+  <title>Rave Ultimate Studio</title>
   <link rel="stylesheet" href="style.css">
-  <!-- HLS.js для поддержки кино-потоков .m3u8 на всех устройствах -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-  <!-- YouTube IFrame API -->
   <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
@@ -15,81 +13,92 @@
   <!-- Окно входа -->
   <div id="unlock-modal" class="modal-overlay">
     <div class="modal-card">
-      <div class="modal-icon">
-        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
-      </div>
-      <h2>Синхронный просмотр</h2>
-      <p>Смотрите YouTube, фильмы и сайты в реальном времени с чатом и голосовой связью.</p>
-      <input type="text" id="username-input" placeholder="Введите ваш ник..." maxlength="20" autofocus autocomplete="off">
-      <button id="btn-enter" class="btn btn-primary" type="button">Войти в комнату</button>
+      <div class="modal-badge">PREMIUM SYNC</div>
+      <h2>Кинотеатр для друзей</h2>
+      <p>Синхронный просмотр видео с выбором озвучки, субтитров и голосовым чатом.</p>
+      <input type="text" id="username-input" placeholder="Ваш никнейм..." maxlength="20" autofocus autocomplete="off">
+      <button id="btn-enter" class="btn btn-primary" type="button">Войти в кинозал</button>
     </div>
   </div>
 
   <div class="app-layout" id="app-root">
     
-    <!-- Шапка -->
+    <!-- Верхняя панель -->
     <header class="top-nav">
       <div class="brand">
         <span class="live-dot"></span>
         <span id="room-badge">Комната: ...</span>
+        <span id="host-badge" class="host-badge" title="Ведущий комнаты">👑 Хост</span>
       </div>
 
       <div class="nav-controls">
-        <button id="btn-mic" class="btn btn-icon" title="Включить микрофон">
+        <button id="btn-mic" class="btn btn-icon" title="Включить голосовой чат">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-          <span class="btn-text">Голос</span>
+          <span class="btn-label" id="mic-label">Голос (Выкл)</span>
         </button>
 
-        <button id="btn-screenshare" class="btn btn-icon" title="Стрим экрана/сайта (VK, стримы)">
+        <button id="btn-screenshare" class="btn btn-icon" title="Стрим экрана/сайта (VK, Kinopoisk)">
           <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          <span class="btn-text">Стрим сайта</span>
+          <span class="btn-label">Стрим сайта</span>
         </button>
 
-        <button id="btn-copy-invite" class="btn btn-secondary" title="Копировать ссылку">
+        <button id="btn-force-sync" class="btn btn-icon" title="Принудительно догнать видео">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+        </button>
+
+        <button id="btn-copy-invite" class="btn btn-secondary">
           <svg class="icon" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-          <span class="btn-text">Ссылка</span>
+          <span class="btn-label">Ссылка</span>
         </button>
       </div>
     </header>
 
-    <!-- Основная рабочая зона -->
+    <!-- Основной блок -->
     <main class="main-body">
       
-      <!-- Плеер -->
+      <!-- Секция плеера -->
       <section class="player-wrapper" id="player-container">
         
-        <!-- HTML5 / HLS Видео -->
         <video id="main-video" playsinline webkit-playsinline></video>
         
-        <!-- YouTube Плеер -->
         <div id="yt-player-box" style="display:none; width:100%; height:100%;">
           <div id="yt-player"></div>
         </div>
 
-        <!-- Видео стрима экрана -->
         <video id="stream-video" playsinline webkit-playsinline autoplay style="display:none;"></video>
 
-        <!-- Оверлей клика (скрывает/показывает меню) -->
-        <div id="player-tap-zone" class="player-tap-zone"></div>
+        <!-- Зоны для жестов (двойной тап перемотки + одинарный паузы) -->
+        <div class="gesture-layer">
+          <div id="tap-left" class="tap-zone" title="Двойной тап: -10с"></div>
+          <div id="tap-center" class="tap-zone" title="Тап: Пауза / Воспроизведение"></div>
+          <div id="tap-right" class="tap-zone" title="Двойной тап: +10с"></div>
+        </div>
+
+        <!-- Всплывающий индикатор действия посередине -->
+        <div id="play-state-flash" class="state-flash">
+          <svg id="flash-icon-play" class="flash-icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <svg id="flash-icon-pause" class="flash-icon" viewBox="0 0 24 24" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        </div>
 
         <!-- Управление плеером -->
         <div class="player-controls" id="player-controls">
           <div class="progress-bar-container" id="seek-bar">
+            <div class="progress-bar-buffered" id="seek-buffered"></div>
             <div class="progress-bar-fill" id="seek-fill"></div>
           </div>
 
           <div class="controls-row">
             <div class="left-ctrls">
-              <button id="btn-play-pause" class="btn-ctrl" title="Воспроизведение/Пауза">
+              <button id="btn-play-pause" class="btn-ctrl">
                 <svg id="icon-play" class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <svg id="icon-pause" class="icon" viewBox="0 0 24 24" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
               </button>
 
-              <button id="btn-backward" class="btn-ctrl" title="Назад на 10 сек">
+              <button id="btn-backward" class="btn-ctrl" title="-10 сек">
                 <svg class="icon" viewBox="0 0 24 24"><polygon points="11 19 2 12 11 5 11 19"/><polygon points="22 19 13 12 22 5 22 19"/></svg>
               </button>
 
-              <button id="btn-forward" class="btn-ctrl" title="Вперед на 10 сек">
+              <button id="btn-forward" class="btn-ctrl" title="+10 сек">
                 <svg class="icon" viewBox="0 0 24 24"><polygon points="13 19 22 12 13 5 13 19"/><polygon points="2 19 11 12 2 5 2 19"/></svg>
               </button>
 
@@ -101,9 +110,9 @@
             </div>
 
             <div class="right-ctrls">
-              <button id="btn-toggle-queue" class="btn-ctrl" title="Очередь">
-                <svg class="icon" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-                <span id="queue-count">0</span>
+              <!-- Кнопка вызова настроек (Озвучка, Субтитры, Качество) -->
+              <button id="btn-settings" class="btn-ctrl" title="Настройки дорожек и субтитров">
+                <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               </button>
 
               <button id="btn-fullscreen" class="btn-ctrl" title="На весь экран">
@@ -112,32 +121,79 @@
             </div>
           </div>
         </div>
+
+        <!-- Выпадающее меню настроек дорожек и субтитров -->
+        <div id="settings-menu" class="settings-menu">
+          <div class="settings-header">Настройки плеера</div>
+          
+          <div class="settings-group">
+            <label>Озвучка (Аудиодорожка):</label>
+            <select id="select-audio-track">
+              <option value="-1">По умолчанию / Основная</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label>Субтитры:</label>
+            <select id="select-subtitle-track">
+              <option value="-1">Отключены</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label>Качество:</label>
+            <select id="select-quality-track">
+              <option value="-1">Автоматически</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label>Скорость:</label>
+            <select id="select-speed">
+              <option value="0.75">0.75x</option>
+              <option value="1" selected>1.0x (Нормальная)</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2">2.0x</option>
+            </select>
+          </div>
+        </div>
       </section>
 
-      <!-- Правая панель (Чат и медиа) -->
+      <!-- Правая панель (Чат, Очередь, Голосовой список) -->
       <aside class="sidebar-wrapper">
+        
+        <!-- Голосовая комната (участники с микрофонами) -->
+        <div class="voice-strip" id="voice-strip">
+          <span class="voice-strip-title">Голос:</span>
+          <div class="voice-users" id="voice-users-list">
+            <!-- Пользователи с индикаторами активности -->
+          </div>
+        </div>
+
         <div class="sidebar-tabs">
           <button id="tab-chat" class="tab-btn active">Чат</button>
-          <button id="tab-queue" class="tab-btn">Очередь</button>
+          <button id="tab-queue" class="tab-btn">Очередь (<span id="queue-badge">0</span>)</button>
           <button id="tab-add" class="tab-btn">+ Добавить</button>
         </div>
 
-        <!-- 1. ЧАТ -->
+        <!-- ЧАТ -->
         <div id="view-chat" class="tab-view active">
           <div class="chat-messages" id="chat-scroller"></div>
 
-          <!-- Индикатор записи голосового -->
-          <div id="voice-record-bar" class="voice-record-indicator" style="display:none;">
-            <span class="record-pulse"></span>
+          <!-- Запись аудиосообщения -->
+          <div id="voice-record-bar" class="voice-record-bar" style="display:none;">
+            <div class="rec-dot"></div>
             <span id="voice-timer">00:00</span>
-            <span class="record-label">Запись звука...</span>
-            <button type="button" id="btn-cancel-voice" class="btn-cancel-rec">✕</button>
+            <span class="rec-status">Запись звука...</span>
+            <button type="button" id="btn-cancel-voice" class="btn-cancel-rec">Отмена</button>
+            <button type="button" id="btn-send-voice" class="btn-send-rec">Отправить</button>
           </div>
 
           <form id="chat-form" class="chat-input-panel">
-            <label class="btn-input-icon" title="Прикрепить файл">
+            <label class="btn-input-icon" title="Прикрепить фото или видео">
               <svg class="icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-              <input type="file" id="file-input" accept="image/*,video/*,audio/*" style="display:none;">
+              <input type="file" id="file-input" accept="image/*,video/*" style="display:none;">
             </label>
 
             <button type="button" id="btn-voice-toggle" class="btn-input-icon" title="Записать голосовое сообщение">
@@ -152,41 +208,40 @@
           </form>
         </div>
 
-        <!-- 2. ОЧЕРЕДЬ -->
+        <!-- ОЧЕРЕДЬ -->
         <div id="view-queue" class="tab-view">
           <div class="queue-list" id="queue-items-container">
             <div class="empty-state">Очередь воспроизведения пуста</div>
           </div>
         </div>
 
-        <!-- 3. ДОБАВИТЬ ВИДЕО -->
+        <!-- ДОБАВИТЬ -->
         <div id="view-add" class="tab-view">
           <div class="add-media-form">
-            <h3>Вставьте ссылку</h3>
-            <p class="subtitle">Поддерживает <b>YouTube</b>, онлайн-фильмы <b>.m3u8 (HLS)</b>, прямые ссылки <b>.mp4/.webm</b>:</p>
+            <h3>Воспроизвести контент</h3>
+            <p class="subtitle">Вставьте ссылку на <b>YouTube</b>, онлайн-фильм <b>.m3u8 (HLS с озвучками)</b> или <b>.mp4</b>:</p>
             
-            <input type="text" id="media-url-input" placeholder="https://www.youtube.com/watch?v=... или .mp4">
-            <input type="text" id="media-title-input" placeholder="Название ролика / фильма">
+            <input type="text" id="media-url-input" placeholder="https://..." autocomplete="off">
+            <input type="text" id="media-title-input" placeholder="Название фильма / видео">
 
             <div class="btn-group">
-              <button id="btn-play-now" class="btn btn-primary" type="button">Включить сразу</button>
+              <button id="btn-play-now" class="btn btn-primary" type="button">Включить сейчас</button>
               <button id="btn-add-queue" class="btn btn-secondary" type="button">+ В очередь</button>
             </div>
 
-            <!-- Быстрые примеры для проверки работоспособности -->
             <div class="test-samples">
-              <span class="sample-label">Быстрый тест:</span>
-              <button type="button" class="sample-chip" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" data-title="Big Buck Bunny (MP4)">Тест MP4</button>
-              <button type="button" class="sample-chip" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Big Buck Bunny (HLS m3u8)">Тест HLS</button>
-              <button type="button" class="sample-chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" data-title="Rick Astley (YouTube)">Тест YouTube</button>
+              <span class="sample-label">Проверить плеер:</span>
+              <button type="button" class="sample-chip" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Big Buck Bunny (HLS + Аудиодорожки)">Тест Фильма (HLS с дорожками)</button>
+              <button type="button" class="sample-chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" data-title="YouTube Клип">Тест YouTube</button>
             </div>
 
             <hr class="divider">
 
-            <h3>Как смотреть VK, Кинопоиск, Аниме-сайты?</h3>
-            <p class="subtitle">Сайты защищены от прямой вставки. Нажмите кнопку <b>«Стрим сайта»</b> в шапке, выберите вкладку с фильмом, и все зрители будут синхронно видеть видео со звуком!</p>
+            <h3>VK, Кинопоиск, Аниме-сайты</h3>
+            <p class="subtitle">Нажмите <b>«Стрим сайта»</b> вверху, выберите вкладку с фильмом, и звук с картинкой пойдут напрямую друзьям в высоком качестве.</p>
           </div>
         </div>
+
       </aside>
     </main>
   </div>
