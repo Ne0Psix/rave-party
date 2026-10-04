@@ -10,14 +10,25 @@
 </head>
 <body>
 
-  <!-- Окно входа -->
-  <div id="unlock-modal" class="modal-overlay">
+  <!-- Модальное окно Авторизации / Регистрации -->
+  <div id="auth-modal" class="modal-overlay">
     <div class="modal-card">
-      <div class="modal-badge">PSIXPARTY SYNC</div>
-      <h2>Вход в кинозал</h2>
-      <p>Синхронный просмотр видео с друзьями без задержек и с голосовой связью.</p>
-      <input type="text" id="username-input" placeholder="Ваш никнейм..." maxlength="20" autofocus autocomplete="off">
-      <button id="btn-enter" class="btn btn-primary" type="button">Войти</button>
+      <div class="modal-badge">PSIXPARTY ACCOUNT</div>
+      
+      <!-- Вкладки: Вход / Создать аккаунт -->
+      <div class="auth-tabs">
+        <button id="auth-tab-login" class="auth-tab-btn active">Вход</button>
+        <button id="auth-tab-register" class="auth-tab-btn">Регистрация</button>
+      </div>
+
+      <form id="auth-form" class="auth-form-body">
+        <input type="text" id="auth-username" placeholder="Логин (никнейм)" required autocomplete="username">
+        <input type="password" id="auth-password" placeholder="Пароль" required autocomplete="current-password">
+        
+        <button id="auth-submit-btn" class="btn btn-primary" type="submit">Войти в аккаунт</button>
+      </form>
+
+      <p class="auth-hint">Данные аккаунта навсегда сохраняются в браузере и на сервере.</p>
     </div>
   </div>
 
@@ -37,12 +48,12 @@
           <span class="btn-label" id="mic-label">Голос (Выкл)</span>
         </button>
 
-        <button id="btn-screenshare" class="btn btn-icon" title="Стрим экрана (VK, фильмы)">
+        <button id="btn-screenshare" class="btn btn-icon" title="Стрим экрана с ПК (VK, Фильмы)">
           <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           <span class="btn-label">Стрим сайта</span>
         </button>
 
-        <button id="btn-force-sync" class="btn btn-icon" title="Принудительно догнать видео хоста">
+        <button id="btn-force-sync" class="btn btn-icon" title="Догонять видео хоста">
           <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
         </button>
 
@@ -50,25 +61,33 @@
           <svg class="icon" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           <span class="btn-label">Ссылка</span>
         </button>
+
+        <!-- Кнопка профиля / Выход -->
+        <button id="btn-logout" class="btn btn-icon" title="Выйти из аккаунта">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
       </div>
     </header>
 
-    <!-- Основной рабочий блок -->
+    <!-- Основной блок -->
     <main class="main-body">
       
       <!-- Секция плеера -->
       <section class="player-wrapper" id="player-container">
         
+        <!-- Обычное видео / HLS -->
         <video id="main-video" playsinline webkit-playsinline></video>
         
+        <!-- Контейнер YouTube -->
         <div id="yt-player-box" style="display:none; width:100%; height:100%;">
           <div id="yt-player"></div>
         </div>
 
+        <!-- Стрим экрана -->
         <video id="stream-video" playsinline webkit-playsinline autoplay style="display:none;"></video>
 
-        <!-- Зоны кликов: центр = пауза, края = перемотка -->
-        <div class="gesture-layer">
+        <!-- Жестовый слой (АКТИВЕН ТОЛЬКО ДЛЯ HTML5/HLS, НА YOUTUBE ОТКЛЮЧАЕТСЯ) -->
+        <div class="gesture-layer" id="gesture-layer">
           <div id="tap-left" class="tap-zone"></div>
           <div id="tap-center" class="tap-zone"></div>
           <div id="tap-right" class="tap-zone"></div>
@@ -79,7 +98,12 @@
           <svg id="flash-icon-pause" class="flash-icon" viewBox="0 0 24 24" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
         </div>
 
-        <!-- Панель управления -->
+        <!-- Плавающий бейдж синхронизации для YouTube -->
+        <div id="yt-sync-badge" class="yt-sync-badge" style="display:none;">
+          <span class="live-dot"></span> YouTube Синхронизирован
+        </div>
+
+        <!-- Кастомная панель управления (для HLS и MP4) -->
         <div class="player-controls" id="player-controls">
           <div class="progress-bar-container" id="seek-bar">
             <div class="progress-bar-buffered" id="seek-buffered"></div>
@@ -109,7 +133,7 @@
             </div>
 
             <div class="right-ctrls">
-              <button id="btn-settings" class="btn-ctrl" title="Озвучка, Субтитры, Качество">
+              <button id="btn-settings" class="btn-ctrl" title="Озвучка, субтитры, качество">
                 <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               </button>
 
@@ -122,23 +146,23 @@
 
         <!-- Выпадающее меню настроек плеера -->
         <div id="settings-menu" class="settings-menu">
-          <div class="settings-header">Настройки видео</div>
+          <div class="settings-header">Параметры воспроизведения</div>
           
-          <div class="settings-group">
-            <label>Озвучка (Аудио):</label>
+          <div id="group-audio-track" class="settings-group">
+            <label>Озвучка (Аудиодорожка):</label>
             <select id="select-audio-track">
               <option value="-1">Основная / По умолчанию</option>
             </select>
           </div>
 
-          <div class="settings-group">
+          <div id="group-subtitle-track" class="settings-group">
             <label>Субтитры:</label>
             <select id="select-subtitle-track">
               <option value="-1">Отключены</option>
             </select>
           </div>
 
-          <div class="settings-group">
+          <div id="group-quality-track" class="settings-group">
             <label>Качество:</label>
             <select id="select-quality-track">
               <option value="-1">Автоматически</option>
@@ -146,7 +170,7 @@
           </div>
 
           <div class="settings-group">
-            <label>Скорость:</label>
+            <label>Скорость воспроизведения:</label>
             <select id="select-speed">
               <option value="0.75">0.75x</option>
               <option value="1" selected>1.0x (Нормальная)</option>
@@ -155,29 +179,33 @@
               <option value="2">2.0x</option>
             </select>
           </div>
+
+          <div id="format-note" class="format-note" style="display:none;">
+            Для данного MP4 доступна регулировка скорости. Смена озвучки и качества доступна в фильмах HLS (.m3u8).
+          </div>
         </div>
       </section>
 
       <!-- Правая панель (Чат / Очередь) -->
       <aside class="sidebar-wrapper">
         
-        <!-- Участники голосовой комнаты -->
+        <!-- Голосовая комната -->
         <div class="voice-strip" id="voice-strip">
-          <span class="voice-strip-title">В эфире:</span>
+          <span class="voice-strip-title">Голос:</span>
           <div class="voice-users" id="voice-users-list"></div>
         </div>
 
         <div class="sidebar-tabs">
           <button id="tab-chat" class="tab-btn active">Чат</button>
           <button id="tab-queue" class="tab-btn">Очередь (<span id="queue-badge">0</span>)</button>
-          <button id="tab-add" class="tab-btn">+ Видео</button>
+          <button id="tab-add" class="tab-btn">+ Ссылка</button>
         </div>
 
         <!-- ЧАТ -->
         <div id="view-chat" class="tab-view active">
           <div class="chat-messages" id="chat-scroller"></div>
 
-          <!-- Индикатор записи голосового -->
+          <!-- Запись аудио -->
           <div id="voice-record-bar" class="voice-record-bar" style="display:none;">
             <div class="rec-dot"></div>
             <span id="voice-timer">00:00</span>
@@ -215,7 +243,7 @@
         <div id="view-add" class="tab-view">
           <div class="add-media-form">
             <h3>Включить видео</h3>
-            <p class="subtitle">Вставьте ссылку на <b>YouTube</b>, онлайн-фильм <b>.m3u8 (HLS)</b> или <b>.mp4</b>:</p>
+            <p class="subtitle">Вставьте ссылку на <b>YouTube</b>, онлайн-фильм <b>.m3u8 (HLS с дорожками)</b> или <b>.mp4</b>:</p>
             
             <input type="text" id="media-url-input" placeholder="https://..." autocomplete="off">
             <input type="text" id="media-title-input" placeholder="Название фильма (необязательно)">
@@ -227,14 +255,14 @@
 
             <div class="test-samples">
               <span class="sample-label">Быстрый запуск для теста:</span>
-              <button type="button" class="sample-chip" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Big Buck Bunny (HLS дорожки)">Фильм HLS (с озвучками и качеством)</button>
-              <button type="button" class="sample-chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" data-title="Rick Astley (YouTube)">Клип YouTube</button>
+              <button type="button" class="sample-chip" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Фильм HLS (с озвучками и качеством)">Фильм HLS (Многодорожечный)</button>
+              <button type="button" class="sample-chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" data-title="YouTube Клип">Клип YouTube</button>
             </div>
 
             <hr class="divider">
 
             <h3>VK, Кинопоиск, Netflix, Аниме</h3>
-            <p class="subtitle">Сайты защищены от прямой вставки ссылок. Нажмите вверху <b>«Стрим сайта»</b>, выберите вкладку с фильмом, и ваши друзья будут смотреть видео со звуком в реальном времени!</p>
+            <p class="subtitle">Сайты защищены от прямой вставки ссылок. Нажмите на компьютере <b>«Стрим сайта»</b> вверху, и ваши друзья с любых телефонов смогут смотреть фильм вместе с вами!</p>
           </div>
         </div>
 
