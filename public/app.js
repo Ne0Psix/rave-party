@@ -1,37 +1,35 @@
 let socket;
 try { socket = io(); } catch (e) { console.error("Socket error", e); }
 
-// Парсинг комнаты
-let roomId = 'party_1';
+let roomId = 'psix_1';
 try {
   const urlParams = new URLSearchParams(window.location.search);
   const p = urlParams.get('room');
   if (p) roomId = p;
   else {
-    roomId = 'room_' + Math.random().toString(36).substring(2, 8);
+    roomId = 'psix_' + Math.random().toString(36).substring(2, 8);
     if (window.history && window.history.replaceState && location.protocol.startsWith('http')) {
       window.history.replaceState(null, '', `?room=${roomId}`);
     }
   }
 } catch (e) {}
 
-document.getElementById('room-badge').innerText = `Комната: ${roomId}`;
+document.getElementById('room-badge').innerText = `PsixParty: ${roomId}`;
 
 let myId = null;
 let myUsername = 'Гость';
 let isHost = false;
 let currentHostId = null;
-let serverTimeDelta = 0;
-let isRemoteAction = false;
+let isRemoteSync = false; // Блокировка паразитных циклов паузы
 let currentEngine = 'html5';
 let hlsInstance = null;
 let ytPlayer = null;
 let ytReady = false;
 
-// WebRTC Voice Mesh
+// WebRTC Voice
 let localVoiceStream = null;
 let isMicActive = false;
-const voicePeers = {}; // peerId -> RTCPeerConnection
+const voicePeers = {};
 
 // DOM элементы
 const video = document.getElementById('main-video');
@@ -80,7 +78,7 @@ btnEnter.addEventListener('click', () => {
     if (socket.connected) socket.emit('join_room', { roomId, username: myUsername });
     else socket.on('connect', () => socket.emit('join_room', { roomId, username: myUsername }));
   }
-  showToast(`Добро пожаловать, ${myUsername}!`);
+  showToast(`Добро пожаловать в PsixParty, ${myUsername}!`);
 });
 usernameInput.addEventListener('keydown', e => { if (e.key === 'Enter') btnEnter.click(); });
 
@@ -97,7 +95,7 @@ function showToast(text) {
   setTimeout(() => toast.classList.remove('show'), 2500);
 }
 
-// --- 3. УНИВЕРСАЛЬНЫЙ ПЛЕЕР (YOUTUBE / HLS С ДОРОЖКАМИ / MP4) ---
+// --- 3. УНИВЕРСАЛЬНЫЙ ПЛЕЕР (YOUTUBE / HLS / MP4) ---
 
 function detectMediaType(url) {
   if (!url) return 'html5';
@@ -115,11 +113,11 @@ window.onYouTubeIframeAPIReady = function() {
   ytPlayer = new YT.Player('yt-player', {
     height: '100%',
     width: '100%',
-    playerVars: { autoplay: 0, controls: 0, disablekb: 1, rel: 0, playsinline: 1 },
+    playerVars: { autoplay: 0, controls: 1, rel: 0, playsinline: 1, modestbranding: 1 },
     events: {
       onReady: () => { ytReady = true; },
       onStateChange: (e) => {
-        if (isRemoteAction || currentEngine !== 'youtube') return;
+        if (isRemoteSync || currentEngine !== 'youtube') return;
         if (e.data === YT.PlayerState.PLAYING) emitPlayerAction(true);
         else if (e.data === YT.PlayerState.PAUSED) emitPlayerAction(false);
       }
@@ -171,9 +169,8 @@ function loadMediaSource(url) {
   }
 }
 
-// Заполнение меню озвучек, субтитров и качества
 function resetSettingsOptions() {
-  selectAudio.innerHTML = '<option value="-1">По умолчанию / Основная</option>';
+  selectAudio.innerHTML = '<option value="-1">Основная / По умолчанию</option>';
   selectSubtitles.innerHTML = '<option value="-1">Отключены</option>';
   selectQuality.innerHTML = '<option value="-1">Автоматически</option>';
 }
@@ -181,19 +178,17 @@ function resetSettingsOptions() {
 function populateHlsTracks() {
   if (!hlsInstance) return;
 
-  // Озвучки
   if (hlsInstance.audioTracks && hlsInstance.audioTracks.length > 1) {
     selectAudio.innerHTML = '';
     hlsInstance.audioTracks.forEach((t, i) => {
       const opt = document.createElement('option');
       opt.value = i;
-      opt.innerText = t.name || t.lang || `Дорожка ${i + 1}`;
+      opt.innerText = t.name || t.lang || `Озвучка ${i + 1}`;
       if (i === hlsInstance.audioTrack) opt.selected = true;
       selectAudio.appendChild(opt);
     });
   }
 
-  // Субтитры
   if (hlsInstance.subtitleTracks && hlsInstance.subtitleTracks.length > 0) {
     selectSubtitles.innerHTML = '<option value="-1">Отключены</option>';
     hlsInstance.subtitleTracks.forEach((t, i) => {
@@ -205,7 +200,6 @@ function populateHlsTracks() {
     });
   }
 
-  // Качество
   if (hlsInstance.levels && hlsInstance.levels.length > 1) {
     selectQuality.innerHTML = '<option value="-1">Автоматически</option>';
     hlsInstance.levels.forEach((lvl, i) => {
@@ -216,6 +210,11 @@ function populateHlsTracks() {
     });
   }
 }
+
+// ПРЕДОТВРАЩЕНИЕ ЗАКРЫТИЯ МЕНЮ НАСТРОЕК ПРИ КЛИКЕ ВНУТРЬ
+settingsMenu.addEventListener('click', (e) => {
+  e.stopPropagation();
+});
 
 selectAudio.addEventListener('change', (e) => {
   if (hlsInstance && hlsInstance.audioTracks) {
@@ -251,7 +250,7 @@ btnSettings.addEventListener('click', (e) => {
 });
 document.addEventListener('click', () => settingsMenu.classList.remove('open'));
 
-// --- 4. УПРАВЛЕНИЕ И ЖЕСТЫ (КЛИК ПО ЭКРАНУ = ПАУЗА / ПЛЕЙ) ---
+// --- 4. ПЛЕЕР И ПРЕДОТВРАЩЕНИЕ ЦИКЛИЧЕСКОЙ ПАУЗЫ ---
 
 function getPlayerCurrentTime() {
   if (currentEngine === 'youtube' && ytReady && ytPlayer.getCurrentTime) return ytPlayer.getCurrentTime() || 0;
@@ -283,7 +282,18 @@ function triggerFlashIcon(isPlaying) {
   flashPlay.style.display = isPlaying ? 'block' : 'none';
   flashPause.style.display = isPlaying ? 'none' : 'block';
   flashBox.classList.add('show');
-  setTimeout(() => flashBox.classList.remove('show'), 400);
+  setTimeout(() => flashBox.classList.remove('show'), 350);
+}
+
+function emitPlayerAction(forceIsPlaying) {
+  if (isRemoteSync || !socket) return; // НЕ отправляем echo-события
+  const isPlaying = forceIsPlaying !== undefined ? forceIsPlaying : (
+    currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused
+  );
+  socket.emit('player_action', {
+    currentTime: getPlayerCurrentTime(),
+    isPlaying
+  });
 }
 
 function togglePlayPause() {
@@ -293,11 +303,10 @@ function togglePlayPause() {
   emitPlayerAction(!isPlaying);
 }
 
-// Тап по центру = Play/Pause
 document.getElementById('tap-center').addEventListener('click', togglePlayPause);
 btnPlayPause.addEventListener('click', togglePlayPause);
 
-// Двойные тапы перемотки
+// Двойной тап перемотки
 let leftClicks = 0, rightClicks = 0;
 document.getElementById('tap-left').addEventListener('click', () => {
   leftClicks++;
@@ -309,7 +318,7 @@ document.getElementById('tap-left').addEventListener('click', () => {
       showToast('⏪ 10 сек');
     }
     leftClicks = 0;
-  }, 250);
+  }, 220);
 });
 
 document.getElementById('tap-right').addEventListener('click', () => {
@@ -322,13 +331,12 @@ document.getElementById('tap-right').addEventListener('click', () => {
       showToast('10 сек ⏩');
     }
     rightClicks = 0;
-  }, 250);
+  }, 220);
 });
 
 document.getElementById('btn-backward').onclick = () => { setPlayerTime(Math.max(0, getPlayerCurrentTime() - 10)); emitPlayerAction(); };
 document.getElementById('btn-forward').onclick = () => { setPlayerTime(Math.min(getPlayerDuration(), getPlayerCurrentTime() + 10)); emitPlayerAction(); };
 
-// Автоскрытие панели управления
 let controlsTimeout;
 function showControls() {
   playerControls.classList.remove('hidden');
@@ -341,14 +349,13 @@ function showControls() {
 document.getElementById('player-container').addEventListener('mousemove', showControls);
 document.getElementById('player-container').addEventListener('touchstart', showControls);
 
-// Таймлайн
 setInterval(() => {
   const cur = getPlayerCurrentTime();
   const dur = getPlayerDuration();
   if (dur > 0) {
     seekFill.style.width = (cur / dur * 100) + '%';
     timeDisplay.innerText = `${formatTime(cur)} / ${formatTime(dur)}`;
-    if (video.buffered.length > 0) {
+    if (video.buffered && video.buffered.length > 0) {
       seekBuffered.style.width = (video.buffered.end(video.buffered.length - 1) / dur * 100) + '%';
     }
   }
@@ -368,7 +375,6 @@ function formatTime(s) {
   return `${m < 10 ? '0' : ''}${m}:${sec < 10 ? '0' : ''}${sec}`;
 }
 
-// Горизонтальный Fullscreen
 document.getElementById('btn-fullscreen').onclick = async () => {
   const c = document.getElementById('player-container');
   if (!document.fullscreenElement) {
@@ -381,20 +387,8 @@ document.getElementById('btn-fullscreen').onclick = async () => {
   }
 };
 
-// --- 5. ЖЕЛЕЗНАЯ СИНХРОНИЗАЦИЯ (HOST-HEARTBEAT) ---
+// --- 5. ЖЕЛЕЗНАЯ СИНХРОНИЗАЦИЯ БЕЗ ЗАВИСАНИЙ ---
 
-function emitPlayerAction(forceIsPlaying) {
-  if (isRemoteAction || !socket) return;
-  const isPlaying = forceIsPlaying !== undefined ? forceIsPlaying : (
-    currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused
-  );
-  socket.emit('player_action', {
-    currentTime: getPlayerCurrentTime(),
-    isPlaying
-  });
-}
-
-// Хост периодически шлет точный таймкод
 setInterval(() => {
   if (isHost && socket && socket.connected) {
     const isPlaying = currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused;
@@ -405,13 +399,12 @@ setInterval(() => {
   }
 }, 1500);
 
-// Кнопка принудительной синхронизации
 document.getElementById('btn-force-sync').onclick = () => {
   showToast('Синхронизация с ведущим...');
   if (socket) socket.emit('join_room', { roomId, username: myUsername });
 };
 
-// --- 6. WEBRTC ГОЛОСОВАЯ СВЯЗЬ (МИКРОФОН) ---
+// --- 6. WEBRTC ГОЛОСОВАЯ СВЯЗЬ ---
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 const btnMic = document.getElementById('btn-mic');
 const micLabel = document.getElementById('mic-label');
@@ -438,7 +431,7 @@ btnMic.onclick = async () => {
   }
 };
 
-// --- 7. ЧАТ И КАСТОМНЫЙ ПЛЕЕР ГОЛОСОВЫХ СООБЩЕНИЙ ---
+// --- 7. ЧАТ И КАСТОМНЫЙ ПЛЕЕР ГОЛОСОВЫХ ---
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-text-input');
 const chatScroller = document.getElementById('chat-scroller');
@@ -475,7 +468,6 @@ fileInput.onchange = () => {
   reader.readAsDataURL(file);
 };
 
-// Запись голосовых
 btnVoiceToggle.onclick = async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -522,7 +514,6 @@ btnSendVoice.onclick = () => {
   voiceBar.style.display = 'none';
 };
 
-// Отрисовка сообщений с разделением ЛЕВО/ПРАВО и кастомным аудиоплеером
 function appendMessageUI(msg) {
   const div = document.createElement('div');
   
@@ -530,7 +521,7 @@ function appendMessageUI(msg) {
     div.className = 'chat-msg system';
     div.innerText = msg.text;
   } else {
-    // Проверка отправителя для разделения ЛЕВО / ПРАВО
+    // РАЗДЕЛЕНИЕ НА СВОИ (ПРАВО) И ЧУЖИЕ (ЛЕВО)
     const isMe = (myId && msg.senderId === myId) || (msg.username === myUsername);
     div.className = `chat-msg ${isMe ? 'self' : 'other'}`;
 
@@ -541,10 +532,8 @@ function appendMessageUI(msg) {
       } else if (msg.fileType === 'video') {
         mediaHTML = `<video src="${msg.fileData}" controls class="msg-media"></video>`;
       } else if (msg.fileType === 'audio') {
-        // Кастомный плеер голосового сообщения
-        const playerUniqueId = 'vp_' + Math.random().toString(36).substr(2, 6);
         mediaHTML = `
-          <div class="voice-msg-player" id="${playerUniqueId}">
+          <div class="voice-msg-player">
             <button class="btn-voice-play" type="button">
               <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             </button>
@@ -570,7 +559,6 @@ function appendMessageUI(msg) {
       <div class="msg-time">${msg.time}</div>
     `;
 
-    // Инициализация кастомного аудио плеера
     if (msg.fileType === 'audio') {
       setTimeout(() => initVoicePlayer(div), 50);
     }
@@ -627,7 +615,7 @@ function initVoicePlayer(container) {
   };
 }
 
-// --- 8. СОКЕТЫ И СЕТЕВАЯ СИНХРОНИЗАЦИЯ ---
+// --- 8. СОКЕТЫ И УСТРАНЕНИЕ ЭХО-ПЕТЛИ ПАУЗЫ ---
 if (socket) {
   socket.on('init_state', ({ roomState, messages, myId: id, isHost: hostFlag }) => {
     myId = id;
@@ -653,20 +641,21 @@ if (socket) {
     currentHostId = hostId;
     isHost = (myId === hostId);
     updateHostUI();
-    showToast(isHost ? 'Вы стали ведущим (Хостом)!' : 'Ведущий комнаты сменился');
+    showToast(isHost ? 'Вы назначены Хостом!' : 'Ведущий сменился');
   });
 
+  // ПРИЕМ КОМАНД С БЛОКИРОВКОЙ ЭХО-ПОВТОРА
   socket.on('sync_player', ({ currentTime, isPlaying }) => {
-    isRemoteAction = true;
+    isRemoteSync = true;
     const cur = getPlayerCurrentTime();
-    if (Math.abs(cur - currentTime) > 0.8) setPlayerTime(currentTime);
+    if (Math.abs(cur - currentTime) > 0.7) setPlayerTime(currentTime);
     setPlayerState(isPlaying);
-    setTimeout(() => { isRemoteAction = false; }, 300);
+    setTimeout(() => { isRemoteSync = false; }, 600);
   });
 
   socket.on('heartbeat_sync', ({ currentTime, isPlaying }) => {
-    if (isHost) return; // Хост сам генерирует синхронизацию
-    isRemoteAction = true;
+    if (isHost) return;
+    isRemoteSync = true;
     const cur = getPlayerCurrentTime();
     const drift = Math.abs(cur - currentTime);
 
@@ -678,7 +667,7 @@ if (socket) {
       video.playbackRate = 1.0;
     }
     setPlayerState(isPlaying);
-    setTimeout(() => { isRemoteAction = false; }, 200);
+    setTimeout(() => { isRemoteSync = false; }, 300);
   });
 
   socket.on('video_switched', ({ url, title }) => {
