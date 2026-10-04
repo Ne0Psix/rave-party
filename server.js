@@ -61,6 +61,7 @@ io.on('connection', (socket) => {
 
     socket.to(roomId).emit('peer_joined_voice', { peerId: socket.id, username: socket.username });
     io.to(roomId).emit('update_peers_list', r.peers);
+    io.to(roomId).emit('queue_updated', r.queue);
   });
 
   // Синхронизация Play / Pause / Seek
@@ -72,7 +73,6 @@ io.on('connection', (socket) => {
     r.isPlaying = data.isPlaying;
     r.lastUpdate = Date.now();
 
-    // Отправляем только другим, чтобы не зацикливать автора
     socket.to(socket.roomId).emit('sync_player', {
       currentTime: r.currentTime,
       isPlaying: r.isPlaying,
@@ -106,10 +106,16 @@ io.on('connection', (socket) => {
     io.to(socket.roomId).emit('video_switched', { url: r.videoUrl, title: title || 'Новое видео' });
   });
 
+  // ОЧЕРЕДЬ (ПЛЕЙЛИСТ)
   socket.on('add_to_queue', ({ url, title }) => {
     const r = rooms[socket.roomId];
     if (!r) return;
-    const item = { id: 'q_' + Date.now() + Math.random().toString(36).substr(2, 4), url, title, addedBy: socket.username };
+    const item = { 
+      id: 'q_' + Date.now() + Math.random().toString(36).substr(2, 4), 
+      url, 
+      title: title || url, 
+      addedBy: socket.username 
+    };
     r.queue.push(item);
     io.to(socket.roomId).emit('queue_updated', r.queue);
   });
