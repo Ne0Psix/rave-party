@@ -48,12 +48,12 @@ body, html {
   display: block;
 }
 
-/* Окно входа */
+/* Окно авторизации / регистрации */
 .modal-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.95);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -63,11 +63,12 @@ body, html {
 .modal-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  padding: 32px 24px;
+  padding: 28px 24px;
   border-radius: 18px;
   max-width: 360px;
   width: 100%;
   text-align: center;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.9);
 }
 .modal-badge {
   display: inline-block;
@@ -81,19 +82,49 @@ body, html {
   color: var(--text-secondary);
   margin-bottom: 12px;
 }
-.modal-card h2 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
-.modal-card p { color: var(--text-secondary); font-size: 13px; line-height: 1.4; margin-bottom: 18px; }
-.modal-card input {
+
+.auth-tabs {
+  display: flex;
+  background: var(--bg-elevated);
+  border-radius: 10px;
+  padding: 3px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-subtle);
+}
+.auth-tab-btn {
+  flex: 1;
+  padding: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.auth-tab-btn.active {
+  background: var(--accent-white);
+  color: #000;
+}
+
+.auth-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.auth-form-body input {
   width: 100%;
   padding: 12px 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: #fff;
   border-radius: 10px;
-  margin-bottom: 14px;
   outline: none;
   font-size: 14px;
 }
+.auth-form-body input:focus { border-color: var(--border-focus); }
+.auth-hint { font-size: 11px; color: var(--text-disabled); margin-top: 14px; line-height: 1.4; }
 
 /* Кнопки */
 .btn {
@@ -131,7 +162,7 @@ body, html {
   padding: 0 14px;
   flex-shrink: 0;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; letter-spacing: -0.2px; }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
 .host-badge { background: #eab308; color: #000; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 6px; display: none; }
 .nav-controls { display: flex; gap: 8px; align-items: center; }
@@ -187,6 +218,24 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .state-flash.show { opacity: 1; transform: scale(1); }
 .flash-icon { width: 28px; height: 28px; stroke: #fff; fill: #fff; }
 
+/* YouTube бейдж */
+.yt-sync-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(16, 16, 20, 0.85);
+  border: 1px solid var(--border-subtle);
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 20;
+  backdrop-filter: blur(6px);
+}
+
 .player-controls {
   position: absolute;
   bottom: 0;
@@ -228,7 +277,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   border: 1px solid var(--border-focus);
   border-radius: 12px;
   padding: 14px;
-  width: 260px;
+  width: 270px;
   display: none;
   flex-direction: column;
   gap: 12px;
@@ -247,6 +296,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   font-size: 12px;
   outline: none;
 }
+.format-note { font-size: 10px; color: var(--text-disabled); line-height: 1.4; border-top: 1px solid var(--border-subtle); padding-top: 6px; }
 
 /* Сайдбар */
 .sidebar-wrapper {
@@ -310,7 +360,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .tab-view { display: none; flex: 1; flex-direction: column; min-height: 0; height: 100%; overflow: hidden; }
 .tab-view.active { display: flex; }
 
-/* ЧАТ — РАЗДЕЛЕНИЕ НА ЛЕВО И ПРАВО */
+/* Чат */
 .chat-messages {
   flex: 1 1 0%;
   min-height: 0;
@@ -329,8 +379,6 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   position: relative;
   word-break: break-word;
 }
-
-/* Мои сообщения — справа */
 .chat-msg.self {
   align-self: flex-end;
   background: var(--msg-self);
@@ -339,8 +387,6 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   padding: 8px 12px;
 }
 .chat-msg.self .msg-user { display: none; }
-
-/* Чужие сообщения — слева */
 .chat-msg.other {
   align-self: flex-start;
   background: var(--msg-other);
@@ -348,7 +394,6 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
   border-radius: 14px 14px 14px 2px;
   padding: 8px 12px;
 }
-
 .chat-msg.system {
   align-self: center;
   background: transparent;
@@ -362,13 +407,13 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .msg-text { font-size: 13px; line-height: 1.4; color: #fff; }
 .msg-media { max-width: 100%; border-radius: 8px; margin-top: 6px; border: 1px solid var(--border-subtle); }
 
-/* Плеер голосового сообщения */
+/* Плеер голосового */
 .voice-msg-player {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 4px 0;
-  width: 220px;
+  width: 210px;
 }
 .btn-voice-play {
   width: 36px;
@@ -390,7 +435,6 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .voice-meta-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); }
 .voice-speed-pill { cursor: pointer; font-weight: 600; padding: 1px 4px; border-radius: 4px; background: rgba(255,255,255,0.1); }
 
-/* Запись голосового */
 .voice-record-bar {
   display: flex;
   align-items: center;
@@ -407,7 +451,7 @@ video, iframe { width: 100%; height: 100%; border: none; object-fit: contain; }
 .btn-cancel-rec { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
 .btn-send-rec { background: var(--danger); border: none; color: #fff; font-weight: bold; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; }
 
-/* Панель ввода чата — зафиксирована внизу */
+/* Панель ввода чата */
 .chat-input-panel {
   display: flex;
   align-items: center;
