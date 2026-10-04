@@ -21,7 +21,6 @@ let myUsername = localStorage.getItem('psix_username') || '';
 let isHost = false;
 let currentHostId = null;
 
-// Флаги анти-зацикливания воспроизведения
 let isRemoteSync = false;
 let syncCooldownTimer = null;
 let lastKnownPlayingState = null;
@@ -30,6 +29,7 @@ let currentEngine = 'html5';
 let hlsInstance = null;
 let ytPlayer = null;
 let ytReady = false;
+let wtClient = null; // WebTorrent клиент
 
 // WebRTC Voice
 let localVoiceStream = null;
@@ -40,8 +40,11 @@ const voicePeers = {};
 const video = document.getElementById('main-video');
 const ytBox = document.getElementById('yt-player-box');
 const ytSyncBadge = document.getElementById('yt-sync-badge');
+const torrentStatusBar = document.getElementById('torrent-status-bar');
+const torrentStatusText = document.getElementById('torrent-status-text');
 const gestureLayer = document.getElementById('gesture-layer');
 const streamVideo = document.getElementById('stream-video');
+
 const usernameModal = document.getElementById('username-modal');
 const usernameInput = document.getElementById('username-input');
 const btnSaveUsername = document.getElementById('btn-save-username');
@@ -71,7 +74,7 @@ const groupSubtitles = document.getElementById('group-subtitle-track');
 const groupQuality = document.getElementById('group-quality-track');
 const formatNote = document.getElementById('format-note');
 
-// --- 1. АВТОВХОД ПО НИКНЕЙМУ БЕЗ ПАРОЛЕЙ ---
+// --- 1. АВТОВХОД ПО НИКНЕЙМУ ---
 if (!myUsername) {
   usernameModal.style.display = 'flex';
 } else {
@@ -104,7 +107,6 @@ function connectUserToRoom(nick) {
   }
 }
 
-// Поле ввода не уходит под экран
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => {
     document.getElementById('app-root').style.height = `${window.visualViewport.height}px`;
@@ -126,20 +128,26 @@ function showToast(text) {
   setTimeout(() => toast.classList.remove('show'), 2500);
 }
 
-// --- 2. ПОЛНАЯ ЗАЧИСТКА ПЛЕЕРА ОТ ЗВУКОВ ПРОШЛОГО ВИДЕО ---
+// --- 2. WEBTORRENT И ИНИЦИАЛИЗАЦИЯ P2P ---
+function getWT() {
+  if (!wtClient && typeof WebTorrent !== 'undefined') {
+    wtClient = new WebTorrent();
+    wtClient.on('error', err => console.warn('WebTorrent client error:', err));
+  }
+  return wtClient;
+}
+
+// Полная остановка всех старых видео и звуков
 function stopAllMedia() {
-  // 1. Заглушить и очистить HTML5 видео
   video.pause();
   video.removeAttribute('src');
   video.load();
 
-  // 2. Уничтожить HLS
   if (hlsInstance) {
     hlsInstance.destroy();
     hlsInstance = null;
   }
 
-  // 3. Остановить YouTube
   if (ytPlayer && ytPlayer.stopVideo) {
     try {
       ytPlayer.stopVideo();
@@ -147,18 +155,53 @@ function stopAllMedia() {
     } catch (e) {}
   }
 
-  // 4. Скрыть контейнеры
+  // Сброс торрент-загрузки
+  if (wtClient) {
+    wtClient.torrents.forEach(t => {
+      try { t.destroy(); } catch (e) {}
+    });
+  }
+
   video.style.display = 'none';
   ytBox.style.display = 'none';
   streamVideo.style.display = 'none';
   ytSyncBadge.style.display = 'none';
+  torrentStatusBar.style.display = 'none';
 }
 
-function detectMediaType(url) {
-  if (!url) return 'html5';
-  if (url.includes('youtube.com/') || url.includes('youtu.be/')) return 'youtube';
-  if (url.includes('.m3u8')) return 'hls';
-  return 'html5';
+// Парсер ссылок: распознает Google Drive, Magnet/Torrent, YouTube, HLS
+function parseMediaUrl(rawUrl) {
+  if (!rawUrl) return { url: '', engine: 'html5' };
+  let url = rawUrl.trim();
+
+  // 1. Google Drive: конвертация в прямой поток
+  if (url.includes('drive.google.com')) {
+    const match = url.match(/(?:file\/d\/|id=)([a-zA-Z0-9_-]+)/);
+    if (match && match[1]) {
+      showToast('Google Drive ссылка преобразована в видеопоток');
+      return {
+        url: `https://drive.google.com/uc?export=download&id=${match[1]}`,
+        engine: 'html5'
+      };
+    }
+  }
+
+  // 2. WebTorrent / Magnet
+  if (url.startsWith('magnet:?xt=urn:btih:') || url.endsWith('.torrent')) {
+    return { url, engine: 'torrent' };
+  }
+
+  // 3. YouTube
+  if (url.includes('youtube.com/') || url.includes('youtu.be/')) {
+    return { url, engine: 'youtube' };
+  }
+
+  // 4. HLS m3u8
+  if (url.includes('.m3u8')) {
+    return { url, engine: 'hls' };
+  }
+
+  return { url, engine: 'html5' };
 }
 
 function extractYouTubeId(url) {
@@ -174,7 +217,6 @@ window.onYouTubeIframeAPIReady = function() {
     events: {
       onReady: () => { ytReady = true; },
       onStateChange: (e) => {
-        // Защита от пинг-понга: реагируем только на физический клик человека, а не на авто-синхронизацию
         if (isRemoteSync || currentEngine !== 'youtube') return;
         if (e.data === YT.PlayerState.PLAYING && lastKnownPlayingState !== true) {
           lastKnownPlayingState = true;
@@ -188,14 +230,17 @@ window.onYouTubeIframeAPIReady = function() {
   });
 };
 
-function loadMediaSource(url) {
-  stopAllMedia(); // Глушим старые звуки
+// Загрузчик медиа любого типа
+function loadMediaSource(rawUrl) {
+  stopAllMedia();
 
-  const type = detectMediaType(url);
-  currentEngine = type;
+  const parsed = parseMediaUrl(rawUrl);
+  currentEngine = parsed.engine;
+  const url = parsed.url;
+
   resetSettingsOptions();
 
-  if (type === 'youtube') {
+  if (currentEngine === 'youtube') {
     ytBox.style.display = 'block';
     ytSyncBadge.style.display = 'flex';
     playerControls.style.display = 'none';
@@ -206,11 +251,36 @@ function loadMediaSource(url) {
       if (ytReady && ytPlayer && ytPlayer.loadVideoById) ytPlayer.loadVideoById(ytid);
       else setTimeout(() => loadMediaSource(url), 500);
     }
+  } else if (currentEngine === 'torrent') {
+    // ВОСПРОИЗВЕДЕНИЕ ИЗ ТОРРЕНТА / MAGNET-ССЫЛКИ
+    video.style.display = 'block';
+    playerControls.style.display = 'block';
+    gestureLayer.style.display = 'flex';
+    torrentStatusBar.style.display = 'flex';
+    torrentStatusText.innerText = 'P2P подключение к сидам...';
+
+    const client = getWT();
+    client.add(url, torrent => {
+      torrentStatusText.innerText = `P2P Торрент: ${torrent.name}`;
+      const file = torrent.files.find(f => f.name.endsWith('.mp4') || f.name.endsWith('.mkv') || f.name.endsWith('.webm'));
+      if (file) {
+        file.renderTo(video, { autoplay: true });
+        showToast(`Торрент стримится: ${file.name}`);
+      } else {
+        showToast('В торренте не найден видеофайл');
+      }
+
+      torrent.on('download', () => {
+        const prog = (torrent.progress * 100).toFixed(1);
+        const speed = (torrent.downloadSpeed / 1024 / 1024).toFixed(1);
+        torrentStatusText.innerText = `Торрент: ${prog}% (${speed} MB/s) | Сиды: ${torrent.numPeers}`;
+      });
+    });
   } else {
     playerControls.style.display = 'block';
     gestureLayer.style.display = 'flex';
 
-    if (type === 'hls') {
+    if (currentEngine === 'hls') {
       video.style.display = 'block';
       groupAudio.style.display = 'flex';
       groupSubtitles.style.display = 'flex';
@@ -245,14 +315,29 @@ function loadMediaSource(url) {
   }
 }
 
-// Воспроизведение локального файла из памяти телефона
+// --- 3. ВЫБОР ФАЙЛА С ТЕЛЕФОНА С АВТОМАТИЧЕСКОЙ P2P РАЗДАЧЕЙ ---
 document.getElementById('local-video-file').onchange = (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  const fileUrl = URL.createObjectURL(file);
-  loadMediaSource(fileUrl);
-  showToast(`Запущен локальный файл: ${file.name}`);
+
+  showToast('Создание P2P раздачи для комнаты...');
+  const client = getWT();
+
+  // Локальный мгновенный запуск у себя
+  const localUrl = URL.createObjectURL(file);
+  loadMediaSource(localUrl);
   switchTab('chat');
+
+  // Автоматический P2P сидинг файла для друга
+  client.seed(file, torrent => {
+    showToast(`P2P раздача готова! Друзья подключаются...`);
+    if (socket) {
+      socket.emit('change_video_direct', {
+        url: torrent.magnetURI,
+        title: `[P2P с телефона] ${file.name}`
+      });
+    }
+  });
 };
 
 function resetSettingsOptions() {
@@ -330,7 +415,7 @@ btnSettings.onclick = (e) => {
 };
 document.addEventListener('click', () => settingsMenu.classList.remove('open'));
 
-// --- 3. УСТРАНЕНИЕ ПИНГ-ПОНГА ПАУЗЫ (EVENT LOCK & DEBOUNCE) ---
+// --- 4. ПЛЕЕР И ПРЕДОТВРАЩЕНИЕ ЦИКЛИЧЕСКОЙ ПАУЗЫ ---
 function markRemoteSync(duration = 1000) {
   isRemoteSync = true;
   clearTimeout(syncCooldownTimer);
@@ -472,7 +557,7 @@ document.getElementById('btn-fullscreen').onclick = async () => {
   }
 };
 
-// --- 4. ХОСТ-СИНХРОНИЗАЦИЯ ---
+// --- 5. ХОСТ-СИНХРОНИЗАЦИЯ ---
 setInterval(() => {
   if (isHost && socket && socket.connected) {
     const isPlaying = currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused;
@@ -488,7 +573,7 @@ document.getElementById('btn-force-sync').onclick = () => {
   if (socket) socket.emit('join_room', { roomId, username: myUsername });
 };
 
-// --- 5. СТРИМ ЭКРАНА С ПРОВЕРКОЙ НА ПК ---
+// --- 6. СТРИМ ЭКРАНА С ПК ---
 document.getElementById('btn-screenshare').onclick = async () => {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
     alert('Стрим экрана поддерживается на компьютерах (Windows, Mac, Linux). Мобильные браузеры блокируют захват экрана из соображений безопасности. Запустите трансляцию с ПК, а с телефона смотрите!');
@@ -512,7 +597,7 @@ document.getElementById('btn-screenshare').onclick = async () => {
   }
 };
 
-// --- 6. WEBRTC ГОЛОСОВОЙ ЧАТ ---
+// --- 7. ГОЛОСОВОЙ ЧАТ WEBRTC ---
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 const btnMic = document.getElementById('btn-mic');
 const micLabel = document.getElementById('mic-label');
@@ -539,7 +624,7 @@ btnMic.onclick = async () => {
   }
 };
 
-// --- 7. ЧАТ И КАСТОМНЫЙ ПЛЕЕР ГОЛОСОВЫХ ---
+// --- 8. ЧАТ И КАСТОМНЫЙ ПЛЕЕР ГОЛОСОВЫХ ---
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-text-input');
 const chatScroller = document.getElementById('chat-scroller');
@@ -722,7 +807,7 @@ function initVoicePlayer(container) {
   };
 }
 
-// --- 8. СОКЕТЫ И АНТИ-ЗАКЛИНИВАНИЕ ---
+// --- 9. СОКЕТЫ И НАДЕЖНАЯ ОЧЕРЕДЬ (ПЛЕЙЛИСТ) ---
 if (socket) {
   socket.on('init_state', ({ roomState, messages, myId: id, isHost: hostFlag }) => {
     myId = id;
@@ -752,7 +837,7 @@ if (socket) {
   });
 
   socket.on('sync_player', ({ currentTime, isPlaying }) => {
-    markRemoteSync(1200); // Глушим эхо-паузу на 1.2 сек
+    markRemoteSync(1200);
     const cur = getPlayerCurrentTime();
     if (Math.abs(cur - currentTime) > 0.8) setPlayerTime(currentTime);
     setPlayerState(isPlaying);
@@ -776,11 +861,16 @@ if (socket) {
 
   socket.on('video_switched', ({ url, title }) => {
     loadMediaSource(url);
-    showToast(`Сейчас играет: ${title}`);
+    showToast(`Включено: ${title}`);
   });
 
   socket.on('chat_message', appendMessageUI);
-  socket.on('queue_updated', updateQueueUI);
+  
+  // НАДЕЖНОЕ ОБНОВЛЕНИЕ ОЧЕРЕДИ
+  socket.on('queue_updated', queue => {
+    updateQueueUI(queue);
+  });
+
   socket.on('update_peers_list', updatePeersListUI);
 }
 
@@ -802,23 +892,77 @@ function updatePeersListUI(peers) {
   });
 }
 
-// Очередь
+// РЕНДЕРИНГ ОЧЕРЕДИ С ПРЯМЫМИ EVENT LISTENERS (БЕЗ ОШИБОК)
+function updateQueueUI(queue) {
+  const badge = document.getElementById('queue-badge');
+  if (badge) badge.innerText = (queue && queue.length) || 0;
+
+  const container = document.getElementById('queue-items-container');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (!queue || queue.length === 0) {
+    container.innerHTML = '<div class="empty-state">Очередь воспроизведения пуста</div>';
+    return;
+  }
+
+  queue.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'queue-card';
+    card.innerHTML = `
+      <div>
+        <div class="queue-title">${escapeHTML(item.title)}</div>
+        <div class="queue-meta">Добавил: ${escapeHTML(item.addedBy)}</div>
+      </div>
+      <div class="queue-actions">
+        <button class="btn btn-secondary btn-sm btn-q-play" data-id="${item.id}">▶</button>
+        <button class="btn btn-secondary btn-sm btn-q-del" data-id="${item.id}">✕</button>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+
+  // Привязываем события клика
+  container.querySelectorAll('.btn-q-play').forEach(btn => {
+    btn.onclick = () => {
+      if (socket) socket.emit('play_queue_item', btn.dataset.id);
+    };
+  });
+
+  container.querySelectorAll('.btn-q-del').forEach(btn => {
+    btn.onclick = () => {
+      if (socket) socket.emit('remove_from_queue', btn.dataset.id);
+    };
+  });
+}
+
+// Добавление в очередь и прямое включение
 document.getElementById('btn-play-now').onclick = () => {
-  const url = document.getElementById('media-url-input').value.trim();
-  const title = document.getElementById('media-title-input').value.trim() || url;
-  if (!url) return showToast('Вставьте ссылку');
-  if (socket) socket.emit('change_video_direct', { url, title });
-  document.getElementById('media-url-input').value = '';
+  const input = document.getElementById('media-url-input');
+  const titleInput = document.getElementById('media-title-input');
+  const rawUrl = input.value.trim();
+  const title = titleInput.value.trim() || rawUrl;
+
+  if (!rawUrl) return showToast('Вставьте ссылку');
+  if (socket) socket.emit('change_video_direct', { url: rawUrl, title });
+
+  input.value = '';
+  titleInput.value = '';
   switchTab('chat');
 };
 
 document.getElementById('btn-add-queue').onclick = () => {
-  const url = document.getElementById('media-url-input').value.trim();
-  const title = document.getElementById('media-title-input').value.trim() || url;
-  if (!url) return showToast('Вставьте ссылку');
-  if (socket) socket.emit('add_to_queue', { url, title });
-  document.getElementById('media-url-input').value = '';
-  showToast('Добавлено в очередь');
+  const input = document.getElementById('media-url-input');
+  const titleInput = document.getElementById('media-title-input');
+  const rawUrl = input.value.trim();
+  const title = titleInput.value.trim() || rawUrl;
+
+  if (!rawUrl) return showToast('Вставьте ссылку');
+  if (socket) socket.emit('add_to_queue', { url: rawUrl, title });
+
+  input.value = '';
+  titleInput.value = '';
+  showToast('Добавлено в очередь!');
 };
 
 document.querySelectorAll('.sample-chip').forEach(btn => {
@@ -828,31 +972,13 @@ document.querySelectorAll('.sample-chip').forEach(btn => {
   };
 });
 
-function updateQueueUI(queue) {
-  document.getElementById('queue-badge').innerText = queue.length;
-  const c = document.getElementById('queue-items-container');
-  c.innerHTML = queue.length === 0 ? '<div class="empty-state">Очередь пуста</div>' : '';
-  queue.forEach(it => {
-    const d = document.createElement('div');
-    d.className = 'queue-card';
-    d.innerHTML = `
-      <div><div class="queue-title">${escapeHTML(it.title)}</div></div>
-      <div>
-        <button class="btn btn-secondary" onclick="socket.emit('play_queue_item', '${it.id}')">▶</button>
-        <button class="btn btn-secondary" onclick="socket.emit('remove_from_queue', '${it.id}')">✕</button>
-      </div>
-    `;
-    c.appendChild(d);
-  });
-}
-
 document.getElementById('btn-skip-next').onclick = () => {
-  const first = document.querySelector('.queue-card button');
-  if (first) first.click();
+  const firstPlayBtn = document.querySelector('.btn-q-play');
+  if (firstPlayBtn) firstPlayBtn.click();
 };
 video.onended = () => {
-  const first = document.querySelector('.queue-card button');
-  if (first) first.click();
+  const firstPlayBtn = document.querySelector('.btn-q-play');
+  if (firstPlayBtn) firstPlayBtn.click();
 };
 
 function switchTab(k) {
