@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: 50 * 1024 * 1024 // До 50MB на фото/видео/аудио
+  maxHttpBufferSize: 50 * 1024 * 1024
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -15,35 +15,32 @@ app.use(express.static(path.join(__dirname, 'public')));
 const rooms = {};
 
 io.on('connection', (socket) => {
-  // NTP Синхронизация времени
   socket.on('sync_ntp', (t) => {
     socket.emit('sync_ntp_response', { clientT: t, serverT: Date.now() });
   });
 
-  // Вход в комнату
   socket.on('join_room', ({ roomId, username }) => {
     socket.join(roomId);
     socket.roomId = roomId;
-    socket.username = username || 'Пользователь';
+    socket.username = username || 'Гость';
 
     if (!rooms[roomId]) {
       rooms[roomId] = {
         hostId: socket.id,
-        videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', // Качественный тестовый HLS с субтитрами
+        videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
         currentTime: 0,
         isPlaying: false,
         lastUpdate: Date.now(),
         queue: [],
         messages: [],
         broadcasterId: null,
-        peers: {} // socketId -> { username, isMicOn }
+        peers: {}
       };
     }
 
     const r = rooms[roomId];
     r.peers[socket.id] = { username: socket.username, isMicOn: false };
 
-    // Если хост вышел ранее, назначаем нового
     if (!r.peers[r.hostId]) {
       r.hostId = socket.id;
     }
@@ -70,7 +67,6 @@ io.on('connection', (socket) => {
     });
 
     io.to(roomId).emit('update_peers_list', r.peers);
-
     io.to(roomId).emit('chat_message', {
       id: 'sys_' + Date.now(),
       system: true,
@@ -79,7 +75,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Синхронизация воспроизведения (Play / Pause / Seek)
+  // Синхронизация действий плеера
   socket.on('player_action', (data) => {
     const r = rooms[socket.roomId];
     if (!r) return;
@@ -88,15 +84,15 @@ io.on('connection', (socket) => {
     r.isPlaying = data.isPlaying;
     r.lastUpdate = Date.now();
 
+    // Отправляем строго ДРУГИМ участникам, чтобы избежать эхо-петли
     socket.to(socket.roomId).emit('sync_player', {
       currentTime: r.currentTime,
       isPlaying: r.isPlaying,
-      serverTimestamp: r.lastUpdate,
-      senderId: socket.id
+      serverTimestamp: r.lastUpdate
     });
   });
 
-  // Сердцебиение синхронизации от Хоста (каждые 1.5 сек)
+  // Сердцебиение синхронизации от ведущего (Host)
   socket.on('host_heartbeat', (data) => {
     const r = rooms[socket.roomId];
     if (!r || r.hostId !== socket.id) return;
@@ -112,23 +108,16 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Смена видео
   socket.on('change_video_direct', ({ url, title }) => {
     const r = rooms[socket.roomId];
     if (!r) return;
-
     r.videoUrl = url;
     r.currentTime = 0;
     r.isPlaying = true;
     r.lastUpdate = Date.now();
-
-    io.to(socket.roomId).emit('video_switched', {
-      url: r.videoUrl,
-      title: title || 'Новое видео'
-    });
+    io.to(socket.roomId).emit('video_switched', { url: r.videoUrl, title: title || 'Новое видео' });
   });
 
-  // Очередь
   socket.on('add_to_queue', ({ url, title }) => {
     const r = rooms[socket.roomId];
     if (!r) return;
@@ -159,7 +148,7 @@ io.on('connection', (socket) => {
     io.to(socket.roomId).emit('queue_updated', r.queue);
   });
 
-  // Стрим экрана (VK, любые сайты)
+  // WebRTC стрим экрана (VK / Netflix)
   socket.on('start_screen_stream', () => {
     const r = rooms[socket.roomId];
     if (!r) return;
@@ -174,7 +163,7 @@ io.on('connection', (socket) => {
     io.to(socket.roomId).emit('screen_stream_stopped', { fallbackUrl: r.videoUrl });
   });
 
-  // WebRTC Сигнализация (Голосовой чат + Экран)
+  // WebRTC сигнализация (голос + экран)
   socket.on('signal_relay', ({ targetPeerId, signal, type }) => {
     io.to(targetPeerId).emit('signal_relay_received', {
       senderPeerId: socket.id,
@@ -203,14 +192,13 @@ io.on('connection', (socket) => {
       username: socket.username,
       text: data.text || null,
       fileData: data.fileData || null,
-      fileType: data.fileType || null, // 'image', 'video', 'audio', 'file'
+      fileType: data.fileType || null,
       audioDuration: data.audioDuration || null,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
     r.messages.push(msg);
     if (r.messages.length > 200) r.messages.shift();
-
     io.to(socket.roomId).emit('chat_message', msg);
   });
 
@@ -219,16 +207,12 @@ io.on('connection', (socket) => {
     if (r) {
       delete r.peers[socket.id];
       if (r.hostId === socket.id) {
-        const remainingPeers = Object.keys(r.peers);
-        r.hostId = remainingPeers.length > 0 ? remainingPeers[0] : null;
-        if (r.hostId) {
-          io.to(socket.roomId).emit('host_changed', { hostId: r.hostId });
-        }
+        const remaining = Object.keys(r.peers);
+        r.hostId = remaining.length > 0 ? remaining[0] : null;
+        if (r.hostId) io.to(socket.roomId).emit('host_changed', { hostId: r.hostId });
       }
-
       io.to(socket.roomId).emit('peer_left_voice', { peerId: socket.id });
       io.to(socket.roomId).emit('update_peers_list', r.peers);
-
       io.to(socket.roomId).emit('chat_message', {
         id: 'sys_' + Date.now(),
         system: true,
@@ -240,4 +224,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Rave Ultimate запущен на порту ${PORT}`));
+server.listen(PORT, () => console.log(`PsixParty запущен на порту ${PORT}`));
