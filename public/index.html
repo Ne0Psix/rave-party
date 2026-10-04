@@ -10,31 +10,20 @@
 </head>
 <body>
 
-  <!-- Модальное окно Авторизации / Регистрации -->
-  <div id="auth-modal" class="modal-overlay">
+  <!-- Простое окно ввода ника при первом визите (сохраняется навсегда) -->
+  <div id="username-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
-      <div class="modal-badge">PSIXPARTY ACCOUNT</div>
-      
-      <!-- Вкладки: Вход / Создать аккаунт -->
-      <div class="auth-tabs">
-        <button id="auth-tab-login" class="auth-tab-btn active">Вход</button>
-        <button id="auth-tab-register" class="auth-tab-btn">Регистрация</button>
-      </div>
-
-      <form id="auth-form" class="auth-form-body">
-        <input type="text" id="auth-username" placeholder="Логин (никнейм)" required autocomplete="username">
-        <input type="password" id="auth-password" placeholder="Пароль" required autocomplete="current-password">
-        
-        <button id="auth-submit-btn" class="btn btn-primary" type="submit">Войти в аккаунт</button>
-      </form>
-
-      <p class="auth-hint">Данные аккаунта навсегда сохраняются в браузере и на сервере.</p>
+      <div class="modal-badge">PSIXPARTY</div>
+      <h2>Добро пожаловать</h2>
+      <p>Введите ваш никнейм для входа в кинозал. Он сохранится автоматически.</p>
+      <input type="text" id="username-input" placeholder="Ваш никнейм..." maxlength="20" autofocus autocomplete="off">
+      <button id="btn-save-username" class="btn btn-primary" type="button">Войти в кинозал</button>
     </div>
   </div>
 
   <div class="app-layout" id="app-root">
     
-    <!-- Шапка -->
+    <!-- Верхняя панель -->
     <header class="top-nav">
       <div class="brand">
         <span class="live-dot"></span>
@@ -43,14 +32,14 @@
       </div>
 
       <div class="nav-controls">
-        <button id="btn-mic" class="btn btn-icon" title="Включить/выключить микрофон">
+        <button id="btn-mic" class="btn btn-icon" title="Голосовой чат">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
           <span class="btn-label" id="mic-label">Голос (Выкл)</span>
         </button>
 
         <button id="btn-screenshare" class="btn btn-icon" title="Стрим экрана с ПК (VK, Фильмы)">
           <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          <span class="btn-label">Стрим сайта</span>
+          <span class="btn-label">Стрим с ПК</span>
         </button>
 
         <button id="btn-force-sync" class="btn btn-icon" title="Догонять видео хоста">
@@ -62,9 +51,8 @@
           <span class="btn-label">Ссылка</span>
         </button>
 
-        <!-- Кнопка профиля / Выход -->
-        <button id="btn-logout" class="btn btn-icon" title="Выйти из аккаунта">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <button id="btn-edit-username" class="btn btn-icon" title="Сменить никнейм">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
         </button>
       </div>
     </header>
@@ -86,7 +74,7 @@
         <!-- Стрим экрана -->
         <video id="stream-video" playsinline webkit-playsinline autoplay style="display:none;"></video>
 
-        <!-- Жестовый слой (АКТИВЕН ТОЛЬКО ДЛЯ HTML5/HLS, НА YOUTUBE ОТКЛЮЧАЕТСЯ) -->
+        <!-- Жестовый слой (АКТИВЕН ТОЛЬКО ДЛЯ HTML5/HLS) -->
         <div class="gesture-layer" id="gesture-layer">
           <div id="tap-left" class="tap-zone"></div>
           <div id="tap-center" class="tap-zone"></div>
@@ -98,12 +86,11 @@
           <svg id="flash-icon-pause" class="flash-icon" viewBox="0 0 24 24" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
         </div>
 
-        <!-- Плавающий бейдж синхронизации для YouTube -->
         <div id="yt-sync-badge" class="yt-sync-badge" style="display:none;">
           <span class="live-dot"></span> YouTube Синхронизирован
         </div>
 
-        <!-- Кастомная панель управления (для HLS и MP4) -->
+        <!-- Панель управления HTML5/HLS -->
         <div class="player-controls" id="player-controls">
           <div class="progress-bar-container" id="seek-bar">
             <div class="progress-bar-buffered" id="seek-buffered"></div>
@@ -144,9 +131,9 @@
           </div>
         </div>
 
-        <!-- Выпадающее меню настроек плеера -->
+        <!-- Меню настроек плеера -->
         <div id="settings-menu" class="settings-menu">
-          <div class="settings-header">Параметры воспроизведения</div>
+          <div class="settings-header">Параметры видео</div>
           
           <div id="group-audio-track" class="settings-group">
             <label>Озвучка (Аудиодорожка):</label>
@@ -181,7 +168,7 @@
           </div>
 
           <div id="format-note" class="format-note" style="display:none;">
-            Для данного MP4 доступна регулировка скорости. Смена озвучки и качества доступна в фильмах HLS (.m3u8).
+            Для простого файла MP4 доступна смена скорости. Озвучки и субтитры работают в стримах HLS (.m3u8).
           </div>
         </div>
       </section>
@@ -189,7 +176,6 @@
       <!-- Правая панель (Чат / Очередь) -->
       <aside class="sidebar-wrapper">
         
-        <!-- Голосовая комната -->
         <div class="voice-strip" id="voice-strip">
           <span class="voice-strip-title">Голос:</span>
           <div class="voice-users" id="voice-users-list"></div>
@@ -198,7 +184,7 @@
         <div class="sidebar-tabs">
           <button id="tab-chat" class="tab-btn active">Чат</button>
           <button id="tab-queue" class="tab-btn">Очередь (<span id="queue-badge">0</span>)</button>
-          <button id="tab-add" class="tab-btn">+ Ссылка</button>
+          <button id="tab-add" class="tab-btn">+ Видео</button>
         </div>
 
         <!-- ЧАТ -->
@@ -220,7 +206,7 @@
               <input type="file" id="file-input" accept="image/*,video/*" style="display:none;">
             </label>
 
-            <button type="button" id="btn-voice-toggle" class="btn-input-icon" title="Записать голосовое сообщение">
+            <button type="button" id="btn-voice-toggle" class="btn-input-icon" title="Записать голосовое">
               <svg class="icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
             </button>
 
@@ -239,7 +225,7 @@
           </div>
         </div>
 
-        <!-- ДОБАВЛЕНИЕ ССЫЛКИ -->
+        <!-- ДОБАВЛЕНИЕ ССЫЛКИ / ФАЙЛА -->
         <div id="view-add" class="tab-view">
           <div class="add-media-form">
             <h3>Включить видео</h3>
@@ -253,16 +239,17 @@
               <button id="btn-add-queue" class="btn btn-secondary" type="button">+ В очередь</button>
             </div>
 
+            <!-- ВЫБОР ФАЙЛА ИЗ ПАМЯТИ ТЕЛЕФОНА -->
+            <hr class="divider">
+            <h3>📁 Фильм из памяти телефона</h3>
+            <p class="subtitle">Если вы скачали фильм на телефон, выберите его здесь — он мгновенно запустится в плеере:</p>
+            <input type="file" id="local-video-file" accept="video/*" class="local-file-input">
+
             <div class="test-samples">
               <span class="sample-label">Быстрый запуск для теста:</span>
               <button type="button" class="sample-chip" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Фильм HLS (с озвучками и качеством)">Фильм HLS (Многодорожечный)</button>
               <button type="button" class="sample-chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" data-title="YouTube Клип">Клип YouTube</button>
             </div>
-
-            <hr class="divider">
-
-            <h3>VK, Кинопоиск, Netflix, Аниме</h3>
-            <p class="subtitle">Сайты защищены от прямой вставки ссылок. Нажмите на компьютере <b>«Стрим сайта»</b> вверху, и ваши друзья с любых телефонов смогут смотреть фильм вместе с вами!</p>
           </div>
         </div>
 
