@@ -17,10 +17,15 @@ try {
 document.getElementById('room-badge').innerText = `PsixParty: ${roomId}`;
 
 let myId = null;
-let myUsername = 'Гость';
+let myUsername = localStorage.getItem('psix_username') || '';
 let isHost = false;
 let currentHostId = null;
+
+// Флаги анти-зацикливания воспроизведения
 let isRemoteSync = false;
+let syncCooldownTimer = null;
+let lastKnownPlayingState = null;
+
 let currentEngine = 'html5';
 let hlsInstance = null;
 let ytPlayer = null;
@@ -37,7 +42,11 @@ const ytBox = document.getElementById('yt-player-box');
 const ytSyncBadge = document.getElementById('yt-sync-badge');
 const gestureLayer = document.getElementById('gesture-layer');
 const streamVideo = document.getElementById('stream-video');
-const authModal = document.getElementById('auth-modal');
+const usernameModal = document.getElementById('username-modal');
+const usernameInput = document.getElementById('username-input');
+const btnSaveUsername = document.getElementById('btn-save-username');
+const btnEditUsername = document.getElementById('btn-edit-username');
+
 const playerControls = document.getElementById('player-controls');
 const btnPlayPause = document.getElementById('btn-play-pause');
 const iconPlay = document.getElementById('icon-play');
@@ -62,98 +71,40 @@ const groupSubtitles = document.getElementById('group-subtitle-track');
 const groupQuality = document.getElementById('group-quality-track');
 const formatNote = document.getElementById('format-note');
 
-// --- 1. АВТОРИЗАЦИЯ И ПОСТОЯННОЕ СОХРАНЕНИЕ АККАУНТА (COOKIE / LOCALSTORAGE) ---
-let authMode = 'login'; // 'login' | 'register'
-const tabLogin = document.getElementById('auth-tab-login');
-const tabRegister = document.getElementById('auth-tab-register');
-const authSubmitBtn = document.getElementById('auth-submit-btn');
-const authForm = document.getElementById('auth-form');
-
-tabLogin.onclick = () => {
-  authMode = 'login';
-  tabLogin.classList.add('active');
-  tabRegister.classList.remove('active');
-  authSubmitBtn.innerText = 'Войти в аккаунт';
-};
-
-tabRegister.onclick = () => {
-  authMode = 'register';
-  tabRegister.classList.add('active');
-  tabLogin.classList.remove('active');
-  authSubmitBtn.innerText = 'Создать аккаунт';
-};
-
-// Проверка сессии при открытии сайта
-const savedToken = localStorage.getItem('psix_auth_token');
-if (savedToken) {
-  fetch('/api/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: savedToken })
-  })
-  .then(r => r.json())
-  .then(res => {
-    if (res.success && res.username) {
-      completeAuth(res.username);
-    } else {
-      authModal.style.display = 'flex';
-    }
-  })
-  .catch(() => { authModal.style.display = 'flex'; });
+// --- 1. АВТОВХОД ПО НИКНЕЙМУ БЕЗ ПАРОЛЕЙ ---
+if (!myUsername) {
+  usernameModal.style.display = 'flex';
 } else {
-  authModal.style.display = 'flex';
+  connectUserToRoom(myUsername);
 }
 
-authForm.onsubmit = async (e) => {
-  e.preventDefault();
-  const username = document.getElementById('auth-username').value.trim();
-  const password = document.getElementById('auth-password').value.trim();
-
-  if (!username || !password) return showToast('Заполните логин и пароль');
-
-  const endpoint = authMode === 'register' ? '/api/register' : '/api/login';
-  try {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    const data = await res.json();
-
-    if (data.success && data.token) {
-      localStorage.setItem('psix_auth_token', data.token);
-      completeAuth(data.username);
-    } else {
-      showToast(data.error || 'Ошибка входа');
-    }
-  } catch (err) {
-    showToast('Ошибка сети');
-  }
+btnSaveUsername.onclick = () => {
+  const val = usernameInput.value.trim();
+  if (!val) return showToast('Введите никнейм');
+  myUsername = val;
+  localStorage.setItem('psix_username', myUsername);
+  usernameModal.style.display = 'none';
+  connectUserToRoom(myUsername);
 };
 
-function completeAuth(username) {
-  myUsername = username;
-  authModal.style.display = 'none';
-
-  // Разблокировка медиа-контекста
-  try { video.play().then(() => video.pause()).catch(() => {}); } catch (e) {}
-
-  if (socket) {
-    if (socket.connected) socket.emit('join_room', { roomId, username: myUsername });
-    else socket.on('connect', () => socket.emit('join_room', { roomId, username: myUsername }));
-  }
-  showToast(`Вход выполнен: ${myUsername}`);
-}
-
-// Кнопка выхода из аккаунта
-document.getElementById('btn-logout').onclick = () => {
-  if (confirm('Выйти из аккаунта?')) {
-    localStorage.removeItem('psix_auth_token');
+btnEditUsername.onclick = () => {
+  const newNick = prompt('Введите новый никнейм:', myUsername);
+  if (newNick && newNick.trim()) {
+    myUsername = newNick.trim();
+    localStorage.setItem('psix_username', myUsername);
     location.reload();
   }
 };
 
-// Фикс инпута под клавиатуру
+function connectUserToRoom(nick) {
+  try { video.play().then(() => video.pause()).catch(() => {}); } catch (e) {}
+  if (socket) {
+    if (socket.connected) socket.emit('join_room', { roomId, username: nick });
+    else socket.on('connect', () => socket.emit('join_room', { roomId, username: nick }));
+  }
+}
+
+// Поле ввода не уходит под экран
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => {
     document.getElementById('app-root').style.height = `${window.visualViewport.height}px`;
@@ -175,7 +126,33 @@ function showToast(text) {
   setTimeout(() => toast.classList.remove('show'), 2500);
 }
 
-// --- 2. УНИВЕРСАЛЬНЫЙ ПЛЕЕР (БЕЗ КОНФЛИКТА С YOUTUBE) ---
+// --- 2. ПОЛНАЯ ЗАЧИСТКА ПЛЕЕРА ОТ ЗВУКОВ ПРОШЛОГО ВИДЕО ---
+function stopAllMedia() {
+  // 1. Заглушить и очистить HTML5 видео
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+
+  // 2. Уничтожить HLS
+  if (hlsInstance) {
+    hlsInstance.destroy();
+    hlsInstance = null;
+  }
+
+  // 3. Остановить YouTube
+  if (ytPlayer && ytPlayer.stopVideo) {
+    try {
+      ytPlayer.stopVideo();
+      ytPlayer.clearVideo();
+    } catch (e) {}
+  }
+
+  // 4. Скрыть контейнеры
+  video.style.display = 'none';
+  ytBox.style.display = 'none';
+  streamVideo.style.display = 'none';
+  ytSyncBadge.style.display = 'none';
+}
 
 function detectMediaType(url) {
   if (!url) return 'html5';
@@ -193,39 +170,32 @@ window.onYouTubeIframeAPIReady = function() {
   ytPlayer = new YT.Player('yt-player', {
     height: '100%',
     width: '100%',
-    playerVars: {
-      autoplay: 0,
-      controls: 1, // Родные кнопки YouTube включены
-      rel: 0,
-      playsinline: 1,
-      modestbranding: 1
-    },
+    playerVars: { autoplay: 0, controls: 1, rel: 0, playsinline: 1, modestbranding: 1 },
     events: {
       onReady: () => { ytReady = true; },
       onStateChange: (e) => {
+        // Защита от пинг-понга: реагируем только на физический клик человека, а не на авто-синхронизацию
         if (isRemoteSync || currentEngine !== 'youtube') return;
-        if (e.data === YT.PlayerState.PLAYING) emitPlayerAction(true);
-        else if (e.data === YT.PlayerState.PAUSED) emitPlayerAction(false);
+        if (e.data === YT.PlayerState.PLAYING && lastKnownPlayingState !== true) {
+          lastKnownPlayingState = true;
+          emitPlayerAction(true);
+        } else if (e.data === YT.PlayerState.PAUSED && lastKnownPlayingState !== false) {
+          lastKnownPlayingState = false;
+          emitPlayerAction(false);
+        }
       }
     }
   });
 };
 
 function loadMediaSource(url) {
+  stopAllMedia(); // Глушим старые звуки
+
   const type = detectMediaType(url);
   currentEngine = type;
-
-  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-  video.pause();
-  video.style.display = 'none';
-  ytBox.style.display = 'none';
-  streamVideo.style.display = 'none';
-  ytSyncBadge.style.display = 'none';
-
   resetSettingsOptions();
 
   if (type === 'youtube') {
-    // В РЕЖИМЕ YOUTUBE: Прячем свои конфликтующие контролы, отдаем управление плееру YouTube!
     ytBox.style.display = 'block';
     ytSyncBadge.style.display = 'flex';
     playerControls.style.display = 'none';
@@ -237,7 +207,6 @@ function loadMediaSource(url) {
       else setTimeout(() => loadMediaSource(url), 500);
     }
   } else {
-    // В РЕЖИМЕ HLS / MP4: Включаем наш кастомный плеер
     playerControls.style.display = 'block';
     gestureLayer.style.display = 'flex';
 
@@ -264,7 +233,6 @@ function loadMediaSource(url) {
         video.play().catch(() => {});
       }
     } else {
-      // Обычный MP4: скрываем лишние меню дорожек
       video.style.display = 'block';
       groupAudio.style.display = 'none';
       groupSubtitles.style.display = 'none';
@@ -276,6 +244,16 @@ function loadMediaSource(url) {
     }
   }
 }
+
+// Воспроизведение локального файла из памяти телефона
+document.getElementById('local-video-file').onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const fileUrl = URL.createObjectURL(file);
+  loadMediaSource(fileUrl);
+  showToast(`Запущен локальный файл: ${file.name}`);
+  switchTab('chat');
+};
 
 function resetSettingsOptions() {
   selectAudio.innerHTML = '<option value="-1">Основная / По умолчанию</option>';
@@ -319,7 +297,6 @@ function populateHlsTracks() {
   }
 }
 
-// ПРЕДОТВРАЩЕНИЕ ЗАКРЫТИЯ МЕНЮ НАСТРОЕК
 settingsMenu.addEventListener('click', e => e.stopPropagation());
 
 selectAudio.onchange = (e) => {
@@ -328,21 +305,18 @@ selectAudio.onchange = (e) => {
     showToast(`Озвучка изменена`);
   }
 };
-
 selectSubtitles.onchange = (e) => {
   if (hlsInstance) {
     hlsInstance.subtitleTrack = parseInt(e.target.value);
     showToast(`Субтитры изменены`);
   }
 };
-
 selectQuality.onchange = (e) => {
   if (hlsInstance) {
     hlsInstance.currentLevel = parseInt(e.target.value);
     showToast(`Качество переключено`);
   }
 };
-
 selectSpeed.onchange = (e) => {
   const speed = parseFloat(e.target.value);
   video.playbackRate = speed;
@@ -356,7 +330,13 @@ btnSettings.onclick = (e) => {
 };
 document.addEventListener('click', () => settingsMenu.classList.remove('open'));
 
-// --- 3. УСТРАНЕНИЕ БАГА С ПАУЗОЙ (EVENT LOCK) ---
+// --- 3. УСТРАНЕНИЕ ПИНГ-ПОНГА ПАУЗЫ (EVENT LOCK & DEBOUNCE) ---
+function markRemoteSync(duration = 1000) {
+  isRemoteSync = true;
+  clearTimeout(syncCooldownTimer);
+  syncCooldownTimer = setTimeout(() => { isRemoteSync = false; }, duration);
+}
+
 function getPlayerCurrentTime() {
   if (currentEngine === 'youtube' && ytReady && ytPlayer.getCurrentTime) return ytPlayer.getCurrentTime() || 0;
   return video.currentTime || 0;
@@ -369,7 +349,9 @@ function setPlayerTime(t) {
   if (currentEngine === 'youtube' && ytReady && ytPlayer.seekTo) ytPlayer.seekTo(t, true);
   else video.currentTime = t;
 }
+
 function setPlayerState(play) {
+  lastKnownPlayingState = play;
   if (currentEngine === 'youtube' && ytReady) {
     if (play) ytPlayer.playVideo(); else ytPlayer.pauseVideo();
   } else {
@@ -395,6 +377,7 @@ function emitPlayerAction(forceIsPlaying) {
   const isPlaying = forceIsPlaying !== undefined ? forceIsPlaying : (
     currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused
   );
+  lastKnownPlayingState = isPlaying;
   socket.emit('player_action', {
     currentTime: getPlayerCurrentTime(),
     isPlaying
@@ -411,7 +394,6 @@ function togglePlayPause() {
 document.getElementById('tap-center').onclick = togglePlayPause;
 btnPlayPause.onclick = togglePlayPause;
 
-// Двойные тапы перемотки
 let leftClicks = 0, rightClicks = 0;
 document.getElementById('tap-left').onclick = () => {
   leftClicks++;
@@ -440,7 +422,6 @@ document.getElementById('tap-right').onclick = () => {
 document.getElementById('btn-backward').onclick = () => { setPlayerTime(Math.max(0, getPlayerCurrentTime() - 10)); emitPlayerAction(); };
 document.getElementById('btn-forward').onclick = () => { setPlayerTime(Math.min(getPlayerDuration(), getPlayerCurrentTime() + 10)); emitPlayerAction(); };
 
-// Автоскрытие панели управления
 let controlsTimeout;
 function showControls() {
   playerControls.classList.remove('hidden');
@@ -491,7 +472,7 @@ document.getElementById('btn-fullscreen').onclick = async () => {
   }
 };
 
-// --- 4. ХОСТ-СИНХРОНИЗАЦИЯ БЕЗ ЗАЦИКЛИВАНИЯ ---
+// --- 4. ХОСТ-СИНХРОНИЗАЦИЯ ---
 setInterval(() => {
   if (isHost && socket && socket.connected) {
     const isPlaying = currentEngine === 'youtube' ? (ytPlayer && ytPlayer.getPlayerState() === 1) : !video.paused;
@@ -507,10 +488,10 @@ document.getElementById('btn-force-sync').onclick = () => {
   if (socket) socket.emit('join_room', { roomId, username: myUsername });
 };
 
-// --- 5. СТРИМ ЭКРАНА С ПРОВЕРКОЙ НА МОБИЛЬНЫЕ УСТРОЙСТВА ---
+// --- 5. СТРИМ ЭКРАНА С ПРОВЕРКОЙ НА ПК ---
 document.getElementById('btn-screenshare').onclick = async () => {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    alert('Стрим экрана поддерживается только на компьютерах (Windows, Mac, Linux). Мобильные браузеры блокируют захват экрана из соображений безопасности. Запустите трансляцию с ПК, а с телефона смотрите!');
+    alert('Стрим экрана поддерживается на компьютерах (Windows, Mac, Linux). Мобильные браузеры блокируют захват экрана из соображений безопасности. Запустите трансляцию с ПК, а с телефона смотрите!');
     return;
   }
 
@@ -519,8 +500,7 @@ document.getElementById('btn-screenshare').onclick = async () => {
       video: { frameRate: 30, width: 1280, height: 720 },
       audio: true
     });
-    video.style.display = 'none';
-    ytBox.style.display = 'none';
+    stopAllMedia();
     streamVideo.style.display = 'block';
     streamVideo.srcObject = screenStream;
 
@@ -532,7 +512,7 @@ document.getElementById('btn-screenshare').onclick = async () => {
   }
 };
 
-// --- 6. WEBRTC ГОЛОСОВАЯ СВЯЗЬ ---
+// --- 6. WEBRTC ГОЛОСОВОЙ ЧАТ ---
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 const btnMic = document.getElementById('btn-mic');
 const micLabel = document.getElementById('mic-label');
@@ -659,9 +639,8 @@ function appendMessageUI(msg) {
       } else if (msg.fileType === 'video') {
         mediaHTML = `<video src="${msg.fileData}" controls class="msg-media"></video>`;
       } else if (msg.fileType === 'audio') {
-        const playerUniqueId = 'vp_' + Math.random().toString(36).substr(2, 6);
         mediaHTML = `
-          <div class="voice-msg-player" id="${playerUniqueId}">
+          <div class="voice-msg-player">
             <button class="btn-voice-play" type="button">
               <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             </button>
@@ -743,7 +722,7 @@ function initVoicePlayer(container) {
   };
 }
 
-// --- 8. СОКЕТЫ И ПРЕДОТВРАЩЕНИЕ ЦИКЛИЧЕСКОГО РАССИНХРОНА ---
+// --- 8. СОКЕТЫ И АНТИ-ЗАКЛИНИВАНИЕ ---
 if (socket) {
   socket.on('init_state', ({ roomState, messages, myId: id, isHost: hostFlag }) => {
     myId = id;
@@ -769,21 +748,19 @@ if (socket) {
     currentHostId = hostId;
     isHost = (myId === hostId);
     updateHostUI();
-    showToast(isHost ? 'Вы назначены Хостом комнаты!' : 'Ведущий сменился');
+    showToast(isHost ? 'Вы назначены Хостом!' : 'Ведущий сменился');
   });
 
-  // Применяем паузу/плей молча, без повторного отсыла в сокет
   socket.on('sync_player', ({ currentTime, isPlaying }) => {
-    isRemoteSync = true;
+    markRemoteSync(1200); // Глушим эхо-паузу на 1.2 сек
     const cur = getPlayerCurrentTime();
     if (Math.abs(cur - currentTime) > 0.8) setPlayerTime(currentTime);
     setPlayerState(isPlaying);
-    setTimeout(() => { isRemoteSync = false; }, 400);
   });
 
   socket.on('heartbeat_sync', ({ currentTime, isPlaying }) => {
     if (isHost) return;
-    isRemoteSync = true;
+    markRemoteSync(500);
     const cur = getPlayerCurrentTime();
     const drift = Math.abs(cur - currentTime);
 
@@ -795,12 +772,11 @@ if (socket) {
       video.playbackRate = 1.0;
     }
     setPlayerState(isPlaying);
-    setTimeout(() => { isRemoteSync = false; }, 200);
   });
 
   socket.on('video_switched', ({ url, title }) => {
     loadMediaSource(url);
-    showToast(`Включено: ${title}`);
+    showToast(`Сейчас играет: ${title}`);
   });
 
   socket.on('chat_message', appendMessageUI);
