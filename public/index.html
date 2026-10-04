@@ -5,25 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
   <title>PsixParty</title>
   <link rel="stylesheet" href="style.css">
+  
+  <!-- WebTorrent для P2P-раздачи файлов с телефона и торрентов прямо в браузере -->
+  <script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
+  <!-- HLS для потокового видео m3u8 -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <!-- YouTube API -->
   <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
 
-  <!-- Простое окно ввода ника при первом визите (сохраняется навсегда) -->
+  <!-- Окно ввода ника -->
   <div id="username-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
       <div class="modal-badge">PSIXPARTY</div>
-      <h2>Добро пожаловать</h2>
-      <p>Введите ваш никнейм для входа в кинозал. Он сохранится автоматически.</p>
+      <h2>Вход в кинозал</h2>
+      <p>Введите ваш никнейм. Он сохранится в памяти устройства.</p>
       <input type="text" id="username-input" placeholder="Ваш никнейм..." maxlength="20" autofocus autocomplete="off">
-      <button id="btn-save-username" class="btn btn-primary" type="button">Войти в кинозал</button>
+      <button id="btn-save-username" class="btn btn-primary" type="button">Присоединиться</button>
     </div>
   </div>
 
   <div class="app-layout" id="app-root">
     
-    <!-- Верхняя панель -->
+    <!-- Шапка -->
     <header class="top-nav">
       <div class="brand">
         <span class="live-dot"></span>
@@ -63,18 +68,15 @@
       <!-- Секция плеера -->
       <section class="player-wrapper" id="player-container">
         
-        <!-- Обычное видео / HLS -->
         <video id="main-video" playsinline webkit-playsinline></video>
         
-        <!-- Контейнер YouTube -->
         <div id="yt-player-box" style="display:none; width:100%; height:100%;">
           <div id="yt-player"></div>
         </div>
 
-        <!-- Стрим экрана -->
         <video id="stream-video" playsinline webkit-playsinline autoplay style="display:none;"></video>
 
-        <!-- Жестовый слой (АКТИВЕН ТОЛЬКО ДЛЯ HTML5/HLS) -->
+        <!-- Жестовый слой -->
         <div class="gesture-layer" id="gesture-layer">
           <div id="tap-left" class="tap-zone"></div>
           <div id="tap-center" class="tap-zone"></div>
@@ -90,7 +92,13 @@
           <span class="live-dot"></span> YouTube Синхронизирован
         </div>
 
-        <!-- Панель управления HTML5/HLS -->
+        <!-- Торрент/P2P статус загрузки -->
+        <div id="torrent-status-bar" class="torrent-status-bar" style="display:none;">
+          <span class="live-dot"></span>
+          <span id="torrent-status-text">P2P Подключение к раздаче...</span>
+        </div>
+
+        <!-- Панель управления HTML5/HLS/Torrent -->
         <div class="player-controls" id="player-controls">
           <div class="progress-bar-container" id="seek-bar">
             <div class="progress-bar-buffered" id="seek-buffered"></div>
@@ -131,7 +139,7 @@
           </div>
         </div>
 
-        <!-- Меню настроек плеера -->
+        <!-- Настройки плеера -->
         <div id="settings-menu" class="settings-menu">
           <div class="settings-header">Параметры видео</div>
           
@@ -168,12 +176,12 @@
           </div>
 
           <div id="format-note" class="format-note" style="display:none;">
-            Для простого файла MP4 доступна смена скорости. Озвучки и субтитры работают в стримах HLS (.m3u8).
+            Для данного видео доступна смена скорости. Озвучки и субтитры работают в стримах HLS (.m3u8).
           </div>
         </div>
       </section>
 
-      <!-- Правая панель (Чат / Очередь) -->
+      <!-- Правая панель -->
       <aside class="sidebar-wrapper">
         
         <div class="voice-strip" id="voice-strip">
@@ -184,7 +192,7 @@
         <div class="sidebar-tabs">
           <button id="tab-chat" class="tab-btn active">Чат</button>
           <button id="tab-queue" class="tab-btn">Очередь (<span id="queue-badge">0</span>)</button>
-          <button id="tab-add" class="tab-btn">+ Видео</button>
+          <button id="tab-add" class="tab-btn">+ Источник</button>
         </div>
 
         <!-- ЧАТ -->
@@ -218,37 +226,37 @@
           </form>
         </div>
 
-        <!-- ОЧЕРЕДЬ -->
+        <!-- ОЧЕРЕДЬ (ПЛЕЙЛИСТ) -->
         <div id="view-queue" class="tab-view">
           <div class="queue-list" id="queue-items-container">
             <div class="empty-state">Очередь воспроизведения пуста</div>
           </div>
         </div>
 
-        <!-- ДОБАВЛЕНИЕ ССЫЛКИ / ФАЙЛА -->
+        <!-- ИСТОЧНИКИ МЕДИА -->
         <div id="view-add" class="tab-view">
           <div class="add-media-form">
-            <h3>Включить видео</h3>
-            <p class="subtitle">Вставьте ссылку на <b>YouTube</b>, онлайн-фильм <b>.m3u8 (HLS с дорожками)</b> или <b>.mp4</b>:</p>
+            <h3>Ссылка на видео</h3>
+            <p class="subtitle">Вставьте ссылку на <b>YouTube</b>, <b>Google Drive</b>, <b>Торрент / Magnet</b>, <b>.m3u8 (HLS)</b> или <b>.mp4</b>:</p>
             
-            <input type="text" id="media-url-input" placeholder="https://..." autocomplete="off">
-            <input type="text" id="media-title-input" placeholder="Название фильма (необязательно)">
+            <input type="text" id="media-url-input" placeholder="https://... или magnet:?xt=..." autocomplete="off">
+            <input type="text" id="media-title-input" placeholder="Название видео / фильма">
 
             <div class="btn-group">
               <button id="btn-play-now" class="btn btn-primary" type="button">Включить сразу</button>
               <button id="btn-add-queue" class="btn btn-secondary" type="button">+ В очередь</button>
             </div>
 
-            <!-- ВЫБОР ФАЙЛА ИЗ ПАМЯТИ ТЕЛЕФОНА -->
+            <!-- ВЫБОР ФАЙЛА ИЗ ПАМЯТИ ТЕЛЕФОНА С P2P РАЗДАЧЕЙ -->
             <hr class="divider">
-            <h3>📁 Фильм из памяти телефона</h3>
-            <p class="subtitle">Если вы скачали фильм на телефон, выберите его здесь — он мгновенно запустится в плеере:</p>
+            <h3>📁 Видео из памяти телефона (P2P раздача)</h3>
+            <p class="subtitle">Выберите скачанный фильм. Ваш телефон автоматически запустит защищенную P2P-раздачу для друзей в комнате:</p>
             <input type="file" id="local-video-file" accept="video/*" class="local-file-input">
 
             <div class="test-samples">
               <span class="sample-label">Быстрый запуск для теста:</span>
-              <button type="button" class="sample-chip" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Фильм HLS (с озвучками и качеством)">Фильм HLS (Многодорожечный)</button>
-              <button type="button" class="sample-chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" data-title="YouTube Клип">Клип YouTube</button>
+              <button type="button" class="sample-chip" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Фильм HLS (Многодорожечный)">Тест HLS с озвучками</button>
+              <button type="button" class="sample-chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" data-title="YouTube Клип">Тест YouTube</button>
             </div>
           </div>
         </div>
